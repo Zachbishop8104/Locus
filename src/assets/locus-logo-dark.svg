@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 80" width="280" height="80">
+  <!-- Compass rose -->
+  <g transform="translate(40, 40)">
+    <!-- Cardinal points -->
+    <path d="M0,-32 L6,-8 L0,-12 L-6,-8 Z" fill="#d4eedd"/>
+    <path d="M0,32 L6,8 L0,12 L-6,8 Z" fill="#d4eedd"/>
+    <path d="M32,0 L8,6 L12,0 L8,-6 Z" fill="#d4eedd"/>
+    <path d="M-32,0 L-8,6 L-12,0 L-8,-6 Z" fill="#d4eedd"/>
+    <!-- Diagonal points -->
+    <path d="M21,-21 L6,-8 L8,-6 Z" fill="#52B788"/>
+    <path d="M-21,-21 L-6,-8 L-8,-6 Z" fill="#52B788"/>
+    <path d="M21,21 L6,8 L8,6 Z" fill="#52B788"/>
+    <path d="M-21,21 L-6,8 L-8,6 Z" fill="#52B788"/>
+    <!-- Center diamond -->
+    <path d="M0,-6 L6,0 L0,6 L-6,0 Z" fill="#52B788"/>
+  </g>
+  <!-- Wordmark -->
+  <text
+    x="88"
+    y="48"
+    font-family="system-ui, -apple-system, sans-serif"
+    font-size="28"
+    font-weight="400"
+    letter-spacing="1"
+    fill="#d4eedd"
+  >locus</text>
+  <text
+    x="155"
+    y="48"
+    font-family="system-ui, -apple-system, sans-serif"
+    font-size="28"
+    font-weight="400"
+    fill="#52B788"
+  >.</text>
+</svg>
