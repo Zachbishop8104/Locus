@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { Plus, Folder, FolderOpen, Trash2, MessageSquare, ExternalLink, GitBranch, Ticket } from '@lucide/vue'
+import { Plus, Folder, FolderOpen, Trash2, MessageSquare, ExternalLink, GitBranch, Ticket, Database } from '@lucide/vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useProjectsStore } from '@/stores/projects'
 import { useChatStore } from '@/stores/chat'
 import type { Project } from '@/types'
-import { PROJECT_COLORS } from '@/types'
+import { PROJECT_COLORS, DB_TYPES } from '@/types'
 
 const router = useRouter()
 const projectsStore = useProjectsStore()
@@ -22,13 +22,24 @@ const blankForm = (): Omit<Project, 'id' | 'createdAt'> => ({
   gitRepo: '',
   jiraProject: '',
   color: projectsStore.nextColor(),
+  dbType: '',
+  dbConnectionString: '',
 })
 
 const form = ref(blankForm())
 
 function selectProject(p: Project) {
   selectedId.value = p.id
-  form.value = { name: p.name, description: p.description, localPath: p.localPath, gitRepo: p.gitRepo, jiraProject: p.jiraProject, color: p.color }
+  form.value = {
+    name: p.name,
+    description: p.description,
+    localPath: p.localPath,
+    gitRepo: p.gitRepo,
+    jiraProject: p.jiraProject,
+    color: p.color,
+    dbType: p.dbType ?? '',
+    dbConnectionString: p.dbConnectionString ?? '',
+  }
 }
 
 function startNew() {
@@ -258,6 +269,32 @@ function formatDate(iso: string) {
             placeholder="https://yourorg.atlassian.net/jira/software/projects/MYAPP"
             class="px-3 py-2 rounded-lg border border-border bg-elevated text-fg text-sm placeholder-fg-faint outline-none focus:border-accent-light transition-colors font-mono"
           />
+        </div>
+
+        <!-- Database -->
+        <div class="flex flex-col gap-3">
+          <label class="text-xs font-medium text-fg-subtle uppercase tracking-wide flex items-center gap-1.5">
+            <Database :size="12" /> Database
+          </label>
+          <select
+            v-model="form.dbType"
+            class="px-3 py-2 rounded-lg border border-border bg-elevated text-fg text-sm outline-none focus:border-accent-light transition-colors cursor-pointer"
+          >
+            <option value="">None</option>
+            <option v-for="db in DB_TYPES" :key="db.value" :value="db.value">{{ db.label }}</option>
+          </select>
+          <div v-if="form.dbType" class="flex flex-col gap-1.5">
+            <label class="text-xs text-fg-subtle">Connection String</label>
+            <input
+              v-model="form.dbConnectionString"
+              type="password"
+              placeholder="Server=localhost;Database=mydb;User Id=sa;Password=...;TrustServerCertificate=True;"
+              class="px-3 py-2 rounded-lg border border-border bg-elevated text-fg text-sm placeholder-fg-faint outline-none focus:border-accent-light transition-colors font-mono"
+            />
+            <p class="text-xs text-fg-faint">
+              Stored locally. Use a read-only SQL account. Add <code class="bg-elevated px-1 rounded">TrustServerCertificate=True</code> for local instances with self-signed certificates.
+            </p>
+          </div>
         </div>
 
         <!-- Save -->

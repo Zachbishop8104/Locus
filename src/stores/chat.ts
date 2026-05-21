@@ -50,6 +50,11 @@ export const useChatStore = defineStore('chat', () => {
     conv.messages[conv.messages.length - 1].error = true
   }
 
+  function renameConversation(id: string, title: string) {
+    const conv = conversations.value.find((c) => c.id === id)
+    if (conv) conv.title = title
+  }
+
   function deleteConversation(id: string) {
     conversations.value = conversations.value.filter((c) => c.id !== id)
     if (activeId.value === id) {
@@ -72,6 +77,7 @@ export const useChatStore = defineStore('chat', () => {
     addMessage,
     appendToLastMessage,
     markLastMessageError,
+    renameConversation,
     deleteConversation,
     conversationsForProject,
   }

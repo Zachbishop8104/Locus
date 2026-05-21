@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { MessageSquare, FolderOpen, Settings, Plus, Trash2, Users } from '@lucide/vue'
+import { MessageSquare, FolderOpen, Settings, Plus, Trash2, Users, Pencil } from '@lucide/vue'
 import { useChatStore } from '@/stores/chat'
 import { useProjectsStore } from '@/stores/projects'
+import type { Conversation } from '@/types'
 import logoUrl from '@/assets/locus-logo-dark.svg'
 
 const router = useRouter()
@@ -29,6 +30,26 @@ const sortedConversations = computed(() =>
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
   ),
 )
+
+const renamingId = ref<string | null>(null)
+const renameValue = ref('')
+
+function startRename(conv: Conversation) {
+  renamingId.value = conv.id
+  renameValue.value = conv.title
+  nextTick(() => {
+    const input = document.querySelector<HTMLInputElement>(`[data-rename-id="${conv.id}"]`)
+    input?.focus()
+    input?.select()
+  })
+}
+
+function commitRename() {
+  if (renamingId.value && renameValue.value.trim()) {
+    chat.renameConversation(renamingId.value, renameValue.value.trim())
+  }
+  renamingId.value = null
+}
 
 // Dark forest tokens scoped to the sidebar
 const sidebarVars = {
@@ -94,10 +115,10 @@ const sidebarVars = {
         <div v-if="sortedConversations.length === 0" class="px-3 py-2 text-xs text-fg-faint">
           No conversations yet
         </div>
-        <button
+        <div
           v-for="conv in sortedConversations"
           :key="conv.id"
-          class="group w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer text-left"
+          class="group w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer"
           :class="
             chat.activeId === conv.id
               ? 'bg-elevated text-fg'
@@ -105,8 +126,10 @@ const sidebarVars = {
           "
           @click="
             () => {
-              chat.selectConversation(conv.id)
-              router.push('/chat')
+              if (renamingId !== conv.id) {
+                chat.selectConversation(conv.id)
+                router.push('/chat')
+              }
             }
           "
         >
@@ -115,14 +138,43 @@ const sidebarVars = {
             class="w-1.5 h-1.5 rounded-full shrink-0"
             :style="{ background: projects.getById(conv.projectId)!.color }"
           />
-          <span class="flex-1 truncate">{{ conv.title }}</span>
-          <button
-            class="shrink-0 p-0.5 rounded opacity-0 group-hover:opacity-100 text-fg-subtle hover:text-red-400 transition-all cursor-pointer"
-            @click.stop="chat.deleteConversation(conv.id)"
-          >
-            <Trash2 :size="12" />
-          </button>
-        </button>
+
+          <!-- Rename input -->
+          <input
+            v-if="renamingId === conv.id"
+            v-model="renameValue"
+            :data-rename-id="conv.id"
+            class="flex-1 min-w-0 bg-transparent text-fg text-sm outline-none border-b border-accent-fg"
+            @click.stop
+            @keydown.enter.stop="commitRename"
+            @keydown.escape.stop="renamingId = null"
+            @blur="commitRename"
+          />
+
+          <!-- Normal title -->
+          <span
+            v-else
+            class="flex-1 truncate"
+            @dblclick.stop="startRename(conv)"
+          >{{ conv.title }}</span>
+
+          <!-- Action buttons -->
+          <template v-if="renamingId !== conv.id">
+            <button
+              class="shrink-0 p-0.5 rounded opacity-0 group-hover:opacity-100 text-fg-subtle hover:text-fg transition-all cursor-pointer"
+              title="Rename"
+              @click.stop="startRename(conv)"
+            >
+              <Pencil :size="12" />
+            </button>
+            <button
+              class="shrink-0 p-0.5 rounded opacity-0 group-hover:opacity-100 text-fg-subtle hover:text-red-400 transition-all cursor-pointer"
+              @click.stop="chat.deleteConversation(conv.id)"
+            >
+              <Trash2 :size="12" />
+            </button>
+          </template>
+        </div>
       </div>
     </div>
 

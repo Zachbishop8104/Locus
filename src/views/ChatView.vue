@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { invoke } from '@tauri-apps/api/core'
 import { AlertTriangle } from '@lucide/vue'
 import MessageList from '@/components/chat/MessageList.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
@@ -14,7 +15,7 @@ const router = useRouter()
 const chat = useChatStore()
 const settings = useSettingsStore()
 const projects = useProjectsStore()
-const { isStreaming, streamMessage, cancel } = useClaudeStream()
+const { isStreaming, toolActivity, streamMessage, cancel } = useClaudeStream()
 
 const streamingMessageId = computed(() => {
   if (!isStreaming.value || !chat.activeConversation) return null
@@ -50,6 +51,21 @@ function buildSystemPrompt(project: Project): string {
   return lines.join('\n')
 }
 
+async function autoRenameConversation(convId: string) {
+  const conv = chat.conversations.find((c) => c.id === convId)
+  if (!conv || conv.messages.length !== 2 || !settings.apiKey) return
+  try {
+    const title = await invoke<string>('generate_title', {
+      apiKey: settings.apiKey,
+      userMessage: conv.messages[0].content,
+      assistantMessage: conv.messages[1].content,
+    })
+    if (title) chat.renameConversation(convId, title)
+  } catch {
+    // keep the truncated fallback title
+  }
+}
+
 async function sendMessage(text: string) {
   if (!settings.apiKey) {
     router.push('/settings')
@@ -73,12 +89,14 @@ async function sendMessage(text: string) {
     messages as Parameters<typeof streamMessage>[1],
     settings.model,
     (delta) => chat.appendToLastMessage(convId!, delta),
-    () => {},
+    () => autoRenameConversation(convId!),
     (err) => {
       chat.appendToLastMessage(convId!, err)
       chat.markLastMessageError(convId!)
     },
     system,
+    activeProject.value?.localPath,
+    activeProject.value?.dbConnectionString,
   )
 }
 
@@ -117,7 +135,15 @@ function handleCancel() {
           {{ chat.activeConversation?.title ?? 'New Chat' }}
         </h1>
       </div>
-      <p class="text-xs text-fg-subtle shrink-0 ml-4">{{ settings.model }}</p>
+      <div class="flex items-center gap-3 shrink-0 ml-4">
+        <Transition name="fade">
+          <span v-if="toolActivity" class="flex items-center gap-1.5 text-xs text-fg-subtle">
+            <span class="inline-block w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+            {{ toolActivity }}
+          </span>
+        </Transition>
+        <p class="text-xs text-fg-subtle">{{ settings.model }}</p>
+      </div>
     </div>
 
     <!-- Messages -->
@@ -135,3 +161,14 @@ function handleCancel() {
     />
   </div>
 </template>
+
+<style scoped>
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+</style>

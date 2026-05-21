@@ -32,3 +32,5 @@ rand = "0.8"
 open = "5"
 urlencoding = "2"
 rfd = "0.15"
+tiberius = { version = "0.12", features = ["tds73", "native-tls", "winauth"] }
+tokio-util = { version = "0.7", features = ["compat"] }

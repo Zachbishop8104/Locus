@@ -23,7 +23,15 @@ export interface Project {
   jiraProject: string
   color: string
   createdAt: string
+  dbType?: string
+  dbConnectionString?: string
 }
+
+export const DB_TYPES = [
+  { value: 'sqlserver', label: 'SQL Server' },
+] as const
+
+export type DbType = typeof DB_TYPES[number]['value']
 
 export const PROJECT_COLORS = [
   '#2D6A4F',

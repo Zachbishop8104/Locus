@@ -17,6 +17,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             claude::stream_message,
+            claude::generate_title,
             claude::pick_folder,
             settings::get_api_key,
             settings::set_api_key,
