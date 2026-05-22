@@ -1,7 +1,7 @@
 import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import type { Message } from '@/types'
+import type { Message, EditRequest } from '@/types'
 
 interface ToolUsePayload {
   name: string
@@ -27,6 +27,7 @@ export function useClaudeStream() {
     onDelta: (text: string) => void,
     onDone: () => void,
     onError: (err: string) => void,
+    onEditRequest: (req: EditRequest) => Promise<boolean>,
     system?: string,
     projectPath?: string,
     dbConnectionString?: string,
@@ -36,6 +37,7 @@ export function useClaudeStream() {
 
     unlisten.push(
       await listen<string>('claude:delta', (e) => onDelta(e.payload)),
+
       await listen<ToolUsePayload>('claude:tool_use', (e) => {
         const { name, input } = e.payload
         if (name === 'read_file') {
@@ -44,6 +46,8 @@ export function useClaudeStream() {
           toolActivity.value = `Listing ${input.path ?? '.'}`
         } else if (name === 'search_code') {
           toolActivity.value = `Searching for "${input.pattern}"`
+        } else if (name === 'write_file') {
+          toolActivity.value = `Proposing edit to ${input.path}`
         } else if (name === 'get_database_schema') {
           toolActivity.value = 'Reading database schema'
         } else if (name === 'query_database') {
@@ -52,11 +56,23 @@ export function useClaudeStream() {
           toolActivity.value = name
         }
       }),
+
+      // Non-blocking: emit fires, card shows, streaming continues unblocked.
+      // confirm_write is called only after the user clicks Yes or No.
+      await listen<EditRequest>('claude:edit_request', (e) => {
+        const req = e.payload
+        toolActivity.value = null
+        onEditRequest(req).then(async (approved) => {
+          await invoke('confirm_write', { toolUseId: req.toolUseId, approved }).catch(() => {})
+        })
+      }),
+
       await listen<void>('claude:done', async () => {
         isStreaming.value = false
         await cleanup()
         onDone()
       }),
+
       await listen<string>('claude:error', async (e) => {
         isStreaming.value = false
         await cleanup()

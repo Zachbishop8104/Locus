@@ -5,6 +5,7 @@ mod teams;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(claude::PendingWriteState::new())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -18,6 +19,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             claude::stream_message,
             claude::generate_title,
+            claude::confirm_write,
             claude::pick_folder,
             settings::get_api_key,
             settings::set_api_key,

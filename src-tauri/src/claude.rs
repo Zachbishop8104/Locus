@@ -5,11 +5,27 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Emitter};
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter, Manager};
 use tiberius::{Client as SqlClient, Config};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio::net::TcpStream;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
+
+// ─── Pending Write State ───────────────────────────────────────────────────────
+
+pub(crate) struct PendingWriteEntry {
+    path: PathBuf,
+    content: String,
+}
+
+pub struct PendingWriteState(pub Arc<Mutex<HashMap<String, PendingWriteEntry>>>);
+
+impl PendingWriteState {
+    pub fn new() -> Self {
+        PendingWriteState(Arc::new(Mutex::new(HashMap::new())))
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Message {
@@ -302,25 +318,36 @@ async fn get_schema_sqlserver(connection_string: &str) -> String {
 
 // ─── Tool Definitions ──────────────────────────────────────────────────────────
 
-fn build_tools(has_files: bool, has_db: bool) -> Option<serde_json::Value> {
-    if !has_files && !has_db {
-        return None;
-    }
-
+fn build_tools(has_files: bool, has_db: bool) -> serde_json::Value {
     let mut tools: Vec<serde_json::Value> = Vec::new();
 
+    // write_file and read_file are always available so Claude can read then edit any file.
+    // When a project path is set, use a relative path; otherwise use an absolute path.
+    tools.push(json!({
+        "name": "write_file",
+        "description": "Write or create a file. Use a path relative to the project root when a project is configured, or an absolute path otherwise. Call this tool immediately whenever you want to make any code or text change — do NOT describe the change in chat or say 'go ahead and approve'. The user will see a Yes/No button in the UI. Always provide the complete new file content.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Relative path from project root, or absolute path if no project is set" },
+                "content": { "type": "string", "description": "Complete new file content to write" }
+            },
+            "required": ["path", "content"]
+        }
+    }));
+    tools.push(json!({
+        "name": "read_file",
+        "description": "Read the contents of a file. Use a relative path from the project root when a project is configured, or an absolute path otherwise. Always read a file before calling write_file so you can provide the complete updated content.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Relative path from project root, or absolute path if no project is configured" }
+            },
+            "required": ["path"]
+        }
+    }));
+
     if has_files {
-        tools.push(json!({
-            "name": "read_file",
-            "description": "Read the contents of a file in the project. Use this to examine source code, configs, or any text file.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Path relative to project root" }
-                },
-                "required": ["path"]
-            }
-        }));
         tools.push(json!({
             "name": "list_files",
             "description": "List files in the project directory. Returns relative paths of all non-ignored source files.",
@@ -369,7 +396,7 @@ fn build_tools(has_files: bool, has_db: bool) -> Option<serde_json::Value> {
         }));
     }
 
-    Some(serde_json::Value::Array(tools))
+    serde_json::Value::Array(tools)
 }
 
 // ─── Tool Execution ────────────────────────────────────────────────────────────
@@ -421,10 +448,18 @@ fn safe_path(project_root: &str, relative: &str) -> Result<PathBuf, String> {
     }
 }
 
-fn read_file_tool(project_root: &str, relative_path: &str) -> String {
-    let path = match safe_path(project_root, relative_path) {
-        Ok(p) => p,
-        Err(e) => return format!("Error: {}", e),
+fn read_file_tool(project_root: &str, path_str: &str) -> String {
+    let path = if project_root.is_empty() {
+        let p = PathBuf::from(path_str);
+        if !p.is_absolute() {
+            return "Error: no project is configured — provide an absolute file path".to_string();
+        }
+        p
+    } else {
+        match safe_path(project_root, path_str) {
+            Ok(p) => p,
+            Err(e) => return format!("Error: {}", e),
+        }
     };
     match fs::metadata(&path) {
         Ok(m) if m.len() > 200_000 => {
@@ -444,10 +479,100 @@ fn read_file_tool(project_root: &str, relative_path: &str) -> String {
                 .map(|(i, line)| format!("{:4}\t{}", i + 1, line))
                 .collect::<Vec<_>>()
                 .join("\n");
-            format!("{}\n{}", relative_path, numbered)
+            format!("{}\n{}", path_str, numbered)
         }
         Err(_) => "Error: file is not valid UTF-8 (binary file)".to_string(),
     }
+}
+
+/// Like safe_path but allows the target file to not yet exist.
+/// Only requires that the parent directory chain eventually resolves inside the project root.
+fn safe_path_for_write(project_root: &str, relative: &str) -> Result<PathBuf, String> {
+    if relative.contains("..") {
+        return Err("Path traversal not allowed".to_string());
+    }
+    let base = fs::canonicalize(project_root)
+        .map_err(|e| format!("Invalid project path: {}", e))?;
+    let full = base.join(relative);
+    // Walk upward until we find an existing ancestor we can canonicalize.
+    let mut check = full.clone();
+    loop {
+        if check.exists() {
+            let canonical = fs::canonicalize(&check).map_err(|e| e.to_string())?;
+            if !canonical.starts_with(&base) {
+                return Err("Path is outside the project directory".to_string());
+            }
+            break;
+        }
+        match check.parent() {
+            Some(p) if p != check => check = p.to_path_buf(),
+            _ => return Err("Cannot resolve path inside project directory".to_string()),
+        }
+    }
+    Ok(full)
+}
+
+fn write_file_tool(
+    app: &AppHandle,
+    pending: Arc<Mutex<HashMap<String, PendingWriteEntry>>>,
+    tool_use_id: &str,
+    project_root: &str,
+    file_path: &str,
+    content: &str,
+) -> String {
+    if file_path.is_empty() {
+        return "Error: path is required".to_string();
+    }
+    if file_path.contains("..") {
+        return "Error: path traversal not allowed".to_string();
+    }
+    let path = if project_root.is_empty() {
+        PathBuf::from(file_path)
+    } else {
+        match safe_path_for_write(project_root, file_path) {
+            Ok(p) => p,
+            Err(e) => return format!("Error: {}", e),
+        }
+    };
+
+    let current_content = fs::read_to_string(&path).unwrap_or_default();
+
+    // Store the pending write — the actual write happens only after user approves.
+    pending.lock().unwrap().insert(
+        tool_use_id.to_string(),
+        PendingWriteEntry { path, content: content.to_string() },
+    );
+
+    // Notify the frontend. Returns immediately — no blocking wait.
+    let _ = app.emit("claude:edit_request", json!({
+        "toolUseId": tool_use_id,
+        "filePath": file_path,
+        "currentContent": current_content,
+        "newContent": content
+    }));
+
+    format!("Edit proposed for {}. Waiting for user approval in the UI.", file_path)
+}
+
+#[tauri::command]
+pub async fn confirm_write(
+    state: tauri::State<'_, PendingWriteState>,
+    tool_use_id: String,
+    approved: bool,
+) -> Result<(), String> {
+    let entry = {
+        let mut map = state.0.lock().unwrap();
+        map.remove(&tool_use_id)
+    };
+    if let Some(e) = entry {
+        if approved {
+            if let Some(parent) = e.path.parent() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            fs::write(&e.path, &e.content).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 fn collect_files(dir: &Path, project_root: &Path, entries: &mut Vec<String>, depth: usize) {
@@ -612,6 +737,9 @@ async fn execute_tool(
     input: &serde_json::Value,
     project_root: &str,
     db_connection_string: Option<&str>,
+    app: &AppHandle,
+    pending: Arc<Mutex<HashMap<String, PendingWriteEntry>>>,
+    tool_use_id: &str,
 ) -> String {
     match name {
         "read_file" => read_file_tool(project_root, input["path"].as_str().unwrap_or("")),
@@ -620,6 +748,14 @@ async fn execute_tool(
             project_root,
             input["path"].as_str().unwrap_or("."),
             input["pattern"].as_str().unwrap_or(""),
+        ),
+        "write_file" => write_file_tool(
+            app,
+            pending,
+            tool_use_id,
+            project_root,
+            input["path"].as_str().unwrap_or(""),
+            input["content"].as_str().unwrap_or(""),
         ),
         "get_database_schema" => match db_connection_string {
             Some(conn) => get_schema_sqlserver(conn).await,
@@ -756,6 +892,16 @@ async fn stream_message_local(
     db_connection_string: Option<String>,
 ) -> Result<(), String> {
     let mut system_text = system.unwrap_or_default();
+
+    // File editing is not available via the CLI path — override any instructions
+    // that tell Claude to use write_file or promise to apply file changes.
+    let no_write_note = "File editing tools are not available in this session. When asked to make any code or text changes, show the complete updated file content inside a code block so the user can apply it manually. Do NOT say 'grant permission', 'when the prompt appears', or promise to write files.";
+    if system_text.is_empty() {
+        system_text = no_write_note.to_string();
+    } else {
+        system_text.push_str("\n\n");
+        system_text.push_str(no_write_note);
+    }
 
     // Inject DB schema when conversation references the database
     if let Some(ref conn) = db_connection_string {
@@ -936,10 +1082,27 @@ pub async fn stream_message(
     let client = Client::new();
     let tools = build_tools(project_path.is_some(), db_connection_string.is_some());
 
+    // Always tell Claude to use write_file directly, never describe edits in text.
+    let write_file_instruction = "IMPORTANT — FILE EDITING RULES:\n\
+1. When you need to change any file (fix typos, edit code, update content), call the write_file tool immediately.\n\
+2. Use read_file first to get the current content, then call write_file with the complete corrected content.\n\
+3. Do NOT output the corrected content in your text response.\n\
+4. Do NOT list what you changed. Do NOT describe the edits. Do NOT explain what you are about to do.\n\
+5. Just call the tools — the application shows the diff and Yes/No buttons to the user automatically.\n\
+Outputting file content or change summaries in chat instead of calling write_file is incorrect behavior.";
+    let effective_system = match &system {
+        Some(s) if !s.is_empty() => format!("{}\n\n{}", write_file_instruction, s),
+        _ => write_file_instruction.to_string(),
+    };
+
     let mut api_messages: Vec<serde_json::Value> = messages
         .iter()
         .map(|m| json!({"role": m.role, "content": m.content}))
         .collect();
+
+    // After read_file executes, force the next turn to call a tool so Claude
+    // can't respond with a text description instead of calling write_file.
+    let mut force_tool_use = false;
 
     loop {
         let mut body = json!({
@@ -947,14 +1110,12 @@ pub async fn stream_message(
             "max_tokens": 8096,
             "stream": true,
             "messages": api_messages,
+            "system": effective_system,
         });
-        if let Some(sys) = &system {
-            if !sys.is_empty() {
-                body["system"] = json!(sys);
-            }
-        }
-        if let Some(t) = &tools {
-            body["tools"] = t.clone();
+        body["tools"] = tools.clone();
+        if force_tool_use {
+            body["tool_choice"] = json!({"type": "any"});
+            force_tool_use = false;
         }
 
         let (blocks, stop_reason) = do_stream(&app, &client, &api_key, body).await?;
@@ -979,15 +1140,22 @@ pub async fn stream_message(
             .collect();
         api_messages.push(json!({"role": "assistant", "content": assistant_content}));
 
+        // After read_file, force the next response to use a tool (prevents Claude
+        // from responding with a text description of the file instead of write_file).
+        if blocks.iter().any(|b| b.block_type == "tool_use" && b.name == "read_file") {
+            force_tool_use = true;
+        }
+
         // Execute each tool call and collect results
         let root = project_path.as_deref().unwrap_or("");
         let db_conn = db_connection_string.as_deref();
+        let pending = app.state::<PendingWriteState>().0.clone();
         let mut tool_results: Vec<serde_json::Value> = Vec::new();
         for b in blocks.iter().filter(|b| b.block_type == "tool_use") {
             let input: serde_json::Value =
                 serde_json::from_str(&b.input_json).unwrap_or(json!({}));
             let _ = app.emit("claude:tool_use", json!({"name": b.name, "input": input}));
-            let result = execute_tool(&b.name, &input, root, db_conn).await;
+            let result = execute_tool(&b.name, &input, root, db_conn, &app, pending.clone(), &b.id).await;
             tool_results.push(json!({
                 "type": "tool_result",
                 "tool_use_id": b.id,

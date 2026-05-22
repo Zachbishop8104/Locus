@@ -1,21 +1,25 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { AlertTriangle } from '@lucide/vue'
 import MessageList from '@/components/chat/MessageList.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
+import EditApprovalCard from '@/components/chat/EditApprovalCard.vue'
 import { useChatStore } from '@/stores/chat'
 import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore } from '@/stores/projects'
 import { useClaudeStream } from '@/composables/useClaudeStream'
-import type { Project } from '@/types'
+import type { Project, EditRequest } from '@/types'
 
 const router = useRouter()
 const chat = useChatStore()
 const settings = useSettingsStore()
 const projects = useProjectsStore()
 const { isStreaming, toolActivity, streamMessage, cancel } = useClaudeStream()
+
+const editRequest = ref<EditRequest | null>(null)
+let resolveEdit: ((approved: boolean) => void) | null = null
 
 const streamingMessageId = computed(() => {
   if (!isStreaming.value || !chat.activeConversation) return null
@@ -48,6 +52,9 @@ function buildSystemPrompt(project: Project): string {
   if (project.gitRepo) context.push(`Git repository: ${project.gitRepo}`)
   if (project.jiraProject) context.push(`Jira project: ${project.jiraProject}`)
   if (context.length) lines.push('\n' + context.join('\n'))
+  if (project.localPath && !settings.useLocalClaude) {
+    lines.push('\nWhen making any file change, call write_file immediately — never describe the change in text or say "go ahead and approve". The UI handles approval automatically.')
+  }
   return lines.join('\n')
 }
 
@@ -64,6 +71,26 @@ async function autoRenameConversation(convId: string) {
   } catch {
     // keep the truncated fallback title
   }
+}
+
+function handleEditRequest(req: EditRequest): Promise<boolean> {
+  if (settings.autoApproveEdits) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    editRequest.value = req
+    resolveEdit = resolve
+  })
+}
+
+function approveEdit() {
+  editRequest.value = null
+  resolveEdit?.(true)
+  resolveEdit = null
+}
+
+function denyEdit() {
+  editRequest.value = null
+  resolveEdit?.(false)
+  resolveEdit = null
 }
 
 async function sendMessage(text: string) {
@@ -94,6 +121,7 @@ async function sendMessage(text: string) {
       chat.appendToLastMessage(convId!, err)
       chat.markLastMessageError(convId!)
     },
+    handleEditRequest,
     system,
     activeProject.value?.localPath,
     activeProject.value?.dbConnectionString,
@@ -101,6 +129,7 @@ async function sendMessage(text: string) {
 }
 
 function handleCancel() {
+  denyEdit()
   cancel()
 }
 </script>
@@ -152,6 +181,16 @@ function handleCancel() {
       :streaming-id="streamingMessageId"
     />
 
+    <!-- Inline edit approval card -->
+    <Transition name="card-slide">
+      <EditApprovalCard
+        v-if="editRequest"
+        :request="editRequest"
+        @approve="approveEdit"
+        @deny="denyEdit"
+      />
+    </Transition>
+
     <!-- Input -->
     <MessageInput
       :disabled="!settings.apiKey"
@@ -170,5 +209,15 @@ function handleCancel() {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+.card-slide-enter-active,
+.card-slide-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.card-slide-enter-from,
+.card-slide-leave-to {
+  opacity: 0;
+  transform: translateY(6px);
 }
 </style>

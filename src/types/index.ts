@@ -27,6 +27,13 @@ export interface Project {
   dbConnectionString?: string
 }
 
+export interface EditRequest {
+  toolUseId: string
+  filePath: string
+  currentContent: string
+  newContent: string
+}
+
 export const DB_TYPES = [
   { value: 'sqlserver', label: 'SQL Server' },
 ] as const

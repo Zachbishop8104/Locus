@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { Send, Square } from '@lucide/vue'
 import { MODELS } from '@/types'
 import { useSettingsStore } from '@/stores/settings'
@@ -13,6 +13,13 @@ const emit = defineEmits<{
 const settings = useSettingsStore()
 const text = ref('')
 const textarea = ref<HTMLTextAreaElement | null>(null)
+
+const permissionMode = computed({
+  get: () => (settings.autoApproveEdits ? 'auto' : 'ask'),
+  set: (val: string) => {
+    settings.autoApproveEdits = val === 'auto'
+  },
+})
 
 function submit() {
   const trimmed = text.value.trim()
@@ -56,18 +63,34 @@ function autoResize(e: Event) {
       />
 
       <div class="flex items-center justify-between px-3 pb-2.5">
-        <!-- Model selector -->
-        <select
-          v-model="settings.model"
-          class="text-xs text-fg-muted bg-transparent border border-border-strong rounded-md px-2 py-1 outline-none hover:border-border-strong cursor-pointer transition-colors"
-          :disabled="disabled || streaming"
-        >
-          <option v-for="m in MODELS" :key="m.id" :value="m.id">
-            {{ m.label }}
-          </option>
-        </select>
+        <!-- Left: model + permission mode -->
+        <div class="flex items-center gap-2">
+          <select
+            v-model="settings.model"
+            class="text-xs text-fg-muted bg-transparent border border-border-strong rounded-md px-2 py-1 outline-none hover:border-border-strong cursor-pointer transition-colors"
+            :disabled="disabled || streaming"
+          >
+            <option v-for="m in MODELS" :key="m.id" :value="m.id">
+              {{ m.label }}
+            </option>
+          </select>
 
-        <!-- Actions -->
+          <select
+            v-model="permissionMode"
+            class="text-xs bg-transparent border rounded-md px-2 py-1 outline-none cursor-pointer transition-colors"
+            :class="
+              permissionMode === 'auto'
+                ? 'border-emerald-700/60 text-emerald-400 hover:border-emerald-600'
+                : 'border-border-strong text-fg-muted hover:border-border-strong'
+            "
+            :disabled="disabled || streaming"
+          >
+            <option value="ask">Ask permission</option>
+            <option value="auto">Auto edit</option>
+          </select>
+        </div>
+
+        <!-- Right: hint + send/stop -->
         <div class="flex items-center gap-2">
           <span class="text-xs text-fg-faint">⏎ send · ⇧⏎ newline</span>
           <button
