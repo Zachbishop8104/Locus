@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter};
 use tiberius::{Client as SqlClient, Config};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio::net::TcpStream;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
@@ -744,6 +745,174 @@ async fn do_stream(
     Ok((ordered.into_iter().map(|(_, b)| b).collect(), stop_reason))
 }
 
+// ─── Local Claude CLI ──────────────────────────────────────────────────────────
+
+async fn stream_message_local(
+    app: &AppHandle,
+    messages: Vec<Message>,
+    model: String,
+    system: Option<String>,
+    project_path: Option<String>,
+    db_connection_string: Option<String>,
+) -> Result<(), String> {
+    let mut system_text = system.unwrap_or_default();
+
+    // Inject DB schema when conversation references the database
+    if let Some(ref conn) = db_connection_string {
+        let recent_text: String = messages
+            .iter()
+            .rev()
+            .take(4)
+            .map(|m| m.content.to_lowercase())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let db_kw = [
+            "database", "table", "query", "sql", "schema", "record",
+            "column", "select", "where", "data",
+        ];
+        if db_kw.iter().any(|kw| recent_text.contains(kw)) {
+            let _ = app.emit("claude:tool_use", json!({"name": "get_database_schema", "input": {}}));
+            let schema = get_schema_sqlserver(conn).await;
+            if !schema.starts_with("Error") {
+                if !system_text.is_empty() {
+                    system_text.push_str("\n\n");
+                }
+                system_text.push_str("Database schema:\n");
+                system_text.push_str(&schema);
+            }
+        }
+    }
+
+    // Include prior turns in system prompt so claude -p stays stateless
+    if messages.len() > 1 {
+        if !system_text.is_empty() {
+            system_text.push_str("\n\n");
+        }
+        system_text.push_str("Previous conversation:\n");
+        for msg in messages.iter().take(messages.len() - 1) {
+            let role = if msg.role == "user" { "User" } else { "Assistant" };
+            system_text.push_str(&format!("{}: {}\n\n", role, msg.content));
+        }
+    }
+
+    let current_msg = messages
+        .last()
+        .map(|m| m.content.clone())
+        .unwrap_or_default();
+
+    let mut cmd = tokio::process::Command::new("claude");
+    cmd.arg("--print")
+        .arg("--verbose")
+        .arg("--output-format")
+        .arg("stream-json");
+
+    if !model.is_empty() {
+        cmd.arg("--model").arg(&model);
+    }
+    if !system_text.is_empty() {
+        cmd.arg("--system-prompt").arg(&system_text);
+    }
+    if let Some(ref path) = project_path {
+        cmd.current_dir(path);
+    }
+
+    cmd.arg(&current_msg)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| {
+        let msg = format!(
+            "Failed to launch claude CLI: {}. Ensure 'claude' is installed and you are logged in.",
+            e
+        );
+        let _ = app.emit("claude:error", &msg);
+        msg
+    })?;
+
+    let stdout = child.stdout.take().ok_or("no stdout")?;
+    let stderr_handle = child.stderr.take();
+    let mut reader = tokio::io::BufReader::new(stdout).lines();
+    let mut last_text_len = 0usize;
+
+    while let Some(line) = reader.next_line().await.map_err(|e| e.to_string())? {
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) {
+            match event["type"].as_str() {
+                // Anthropic Messages API delta format
+                Some("content_block_delta") => {
+                    if let Some(text) = event["delta"]["text"].as_str() {
+                        let _ = app.emit("claude:delta", text.to_string());
+                    }
+                }
+                // Claude Code CLI stream-json format — emit only the new portion
+                Some("assistant") => {
+                    if let Some(content) = event["message"]["content"].as_array() {
+                        for block in content {
+                            if block["type"].as_str() == Some("text") {
+                                if let Some(full_text) = block["text"].as_str() {
+                                    if full_text.len() > last_text_len {
+                                        let delta = &full_text[last_text_len..];
+                                        let _ = app.emit("claude:delta", delta.to_string());
+                                        last_text_len = full_text.len();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Some("system") | Some("user") | Some("result") => {}
+                _ => {}
+            }
+        }
+    }
+
+    let status = child.wait().await.map_err(|e| e.to_string())?;
+
+    if !status.success() {
+        let mut err_text = String::new();
+        if let Some(mut se) = stderr_handle {
+            let _ = se.read_to_string(&mut err_text).await;
+        }
+        let msg = if !err_text.trim().is_empty() {
+            format!("Claude CLI error: {}", err_text.trim())
+        } else {
+            "Claude CLI failed. Make sure you are logged in with 'claude login'.".to_string()
+        };
+        let _ = app.emit("claude:error", &msg);
+        return Err(msg);
+    }
+
+    let _ = app.emit("claude:done", ());
+    Ok(())
+}
+
+async fn generate_title_local(user_message: &str, assistant_message: &str) -> Result<String, String> {
+    let preview = &assistant_message[..assistant_message.len().min(500)];
+    let prompt = format!(
+        "Generate a concise 3-5 word title for this conversation. Respond with ONLY the title, no punctuation, no quotes, no explanation.\n\nUser: {}\n\nAssistant: {}",
+        user_message, preview
+    );
+
+    let output = tokio::process::Command::new("claude")
+        .arg("--print")
+        .arg("--output-format")
+        .arg("text")
+        .arg(&prompt)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let title = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if title.is_empty() {
+        return Err("empty title".to_string());
+    }
+    Ok(title)
+}
+
 // ─── Commands ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -756,6 +925,14 @@ pub async fn stream_message(
     project_path: Option<String>,
     db_connection_string: Option<String>,
 ) -> Result<(), String> {
+    let use_local = crate::settings::read_config(&app)["use_local_claude"]
+        .as_bool()
+        .unwrap_or(false);
+
+    if use_local {
+        return stream_message_local(&app, messages, model, system, project_path, db_connection_string).await;
+    }
+
     let client = Client::new();
     let tools = build_tools(project_path.is_some(), db_connection_string.is_some());
 
@@ -823,12 +1000,21 @@ pub async fn stream_message(
 
 #[tauri::command]
 pub async fn generate_title(
+    app: AppHandle,
     api_key: String,
     user_message: String,
     assistant_message: String,
 ) -> Result<String, String> {
     if assistant_message.is_empty() {
         return Err("empty assistant message".to_string());
+    }
+
+    let use_local = crate::settings::read_config(&app)["use_local_claude"]
+        .as_bool()
+        .unwrap_or(false);
+
+    if use_local {
+        return generate_title_local(&user_message, &assistant_message).await;
     }
 
     let client = Client::new();

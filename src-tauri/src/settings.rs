@@ -40,3 +40,17 @@ pub fn set_api_key(app: AppHandle, key: String) -> Result<(), String> {
     config["api_key"] = serde_json::Value::String(key);
     write_config(&app, config)
 }
+
+#[tauri::command]
+pub fn get_use_local_claude(app: AppHandle) -> bool {
+    read_config(&app)["use_local_claude"]
+        .as_bool()
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+pub fn set_use_local_claude(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut config = read_config(&app);
+    config["use_local_claude"] = serde_json::Value::Bool(enabled);
+    write_config(&app, config)
+}

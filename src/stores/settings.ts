@@ -7,9 +7,11 @@ export const useSettingsStore = defineStore('settings', () => {
   const apiKey = ref('')
   const model = ref<ModelId>('claude-sonnet-4-6')
   const loaded = ref(false)
+  const useLocalClaude = ref(false)
 
   async function load() {
     apiKey.value = await invoke<string>('get_api_key')
+    useLocalClaude.value = await invoke<boolean>('get_use_local_claude')
     loaded.value = true
   }
 
@@ -18,5 +20,10 @@ export const useSettingsStore = defineStore('settings', () => {
     apiKey.value = key
   }
 
-  return { apiKey, model, loaded, load, saveApiKey }
+  async function setUseLocalClaude(enabled: boolean) {
+    await invoke('set_use_local_claude', { enabled })
+    useLocalClaude.value = enabled
+  }
+
+  return { apiKey, model, loaded, load, saveApiKey, useLocalClaude, setUseLocalClaude }
 })

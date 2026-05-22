@@ -21,6 +21,8 @@ pub fn run() {
             claude::pick_folder,
             settings::get_api_key,
             settings::set_api_key,
+            settings::get_use_local_claude,
+            settings::set_use_local_claude,
             teams::start_teams_auth,
             teams::get_teams_status,
             teams::get_teams_credentials,

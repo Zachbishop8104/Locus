@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { Eye, EyeOff, Check, Key, Users, Loader2, LogOut, AlertCircle, ExternalLink } from '@lucide/vue'
+import { Eye, EyeOff, Check, Key, Users, Loader2, LogOut, AlertCircle, ExternalLink, Cpu } from '@lucide/vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useTeamsStore } from '@/stores/teams'
 
@@ -60,44 +60,70 @@ async function disconnectTeams() {
     <div class="flex-1 overflow-y-auto px-6 py-6">
       <div class="max-w-lg flex flex-col gap-8">
 
-        <!-- ─── Anthropic API Key ─── -->
+        <!-- ─── Claude Connection ─── -->
         <section class="flex flex-col gap-4">
           <div>
-            <h2 class="text-base font-semibold text-fg">Anthropic API Key</h2>
+            <h2 class="text-base font-semibold text-fg">Claude Connection</h2>
             <p class="text-sm text-fg-subtle mt-1">
-              Required to chat with Claude. Stored locally on this device.
+              Choose how Locus connects to Claude.
             </p>
           </div>
 
-          <div class="flex flex-col gap-2">
-            <label class="flex items-center gap-1.5 text-xs font-medium text-fg-muted">
-              <Key :size="12" /> API Key
-            </label>
-            <div class="relative">
-              <input
-                v-model="inputKey"
-                :type="showKey ? 'text' : 'password'"
-                class="w-full bg-surface border border-border-strong rounded-lg px-3 py-2.5 pr-10 text-sm text-fg placeholder-fg-subtle outline-none focus:border-accent/70 transition-colors"
-                placeholder="sk-ant-…"
-                @keydown.enter="saveApiKey"
-              />
-              <button
-                class="absolute right-3 top-1/2 -translate-y-1/2 text-fg-subtle hover:text-fg-muted transition-colors cursor-pointer"
-                @click="showKey = !showKey"
-              >
-                <component :is="showKey ? EyeOff : Eye" :size="15" />
-              </button>
+          <!-- Local subscription toggle -->
+          <div class="flex items-center justify-between p-4 rounded-xl border border-border-strong bg-surface/60">
+            <div class="flex items-center gap-3">
+              <Cpu :size="16" class="text-accent-icon shrink-0" />
+              <div>
+                <p class="text-sm font-medium text-fg">Use local Claude subscription</p>
+                <p class="text-xs text-fg-subtle mt-0.5">
+                  Use your Claude Code subscription instead of an API key.
+                </p>
+              </div>
             </div>
+            <button
+              class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer"
+              :class="settings.useLocalClaude ? 'bg-accent' : 'bg-border-strong'"
+              @click="settings.setUseLocalClaude(!settings.useLocalClaude)"
+            >
+              <span
+                class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
+                :class="settings.useLocalClaude ? 'translate-x-6' : 'translate-x-1'"
+              />
+            </button>
           </div>
 
-          <button
-            class="flex items-center gap-2 w-fit px-4 py-2 rounded-lg text-sm font-medium transition-all cursor-pointer"
-            :class="saved ? 'bg-emerald-700 text-white' : 'bg-accent hover:bg-accent-light text-white'"
-            @click="saveApiKey"
-          >
-            <Check v-if="saved" :size="15" />
-            {{ saved ? 'Saved!' : 'Save Key' }}
-          </button>
+          <!-- API Key (shown when not using local subscription) -->
+          <template v-if="!settings.useLocalClaude">
+            <div class="flex flex-col gap-2">
+              <label class="flex items-center gap-1.5 text-xs font-medium text-fg-muted">
+                <Key :size="12" /> API Key
+              </label>
+              <div class="relative">
+                <input
+                  v-model="inputKey"
+                  :type="showKey ? 'text' : 'password'"
+                  class="w-full bg-surface border border-border-strong rounded-lg px-3 py-2.5 pr-10 text-sm text-fg placeholder-fg-subtle outline-none focus:border-accent/70 transition-colors"
+                  placeholder="sk-ant-…"
+                  @keydown.enter="saveApiKey"
+                />
+                <button
+                  class="absolute right-3 top-1/2 -translate-y-1/2 text-fg-subtle hover:text-fg-muted transition-colors cursor-pointer"
+                  @click="showKey = !showKey"
+                >
+                  <component :is="showKey ? EyeOff : Eye" :size="15" />
+                </button>
+              </div>
+            </div>
+
+            <button
+              class="flex items-center gap-2 w-fit px-4 py-2 rounded-lg text-sm font-medium transition-all cursor-pointer"
+              :class="saved ? 'bg-emerald-700 text-white' : 'bg-accent hover:bg-accent-light text-white'"
+              @click="saveApiKey"
+            >
+              <Check v-if="saved" :size="15" />
+              {{ saved ? 'Saved!' : 'Save Key' }}
+            </button>
+          </template>
         </section>
 
         <div class="border-t border-border" />

@@ -1,0 +1,322 @@
+{
+  "C:\\Users\\Zach\\source\\repos\\Locus\\package.json": {
+    "mtime": 1779221416.5970762,
+    "ast_hash": "164be47ade4a51d892d9bb194a1d10df",
+    "semantic_hash": "164be47ade4a51d892d9bb194a1d10df"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\tsconfig.app.json": {
+    "mtime": 1779207572.5691636,
+    "ast_hash": "cc7d7d728b40a3a3f797e01205c729cd",
+    "semantic_hash": "cc7d7d728b40a3a3f797e01205c729cd"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\tsconfig.json": {
+    "mtime": 1779206302.7559805,
+    "ast_hash": "a3d39fa780ebff65444de257f291ce6c",
+    "semantic_hash": "a3d39fa780ebff65444de257f291ce6c"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\tsconfig.node.json": {
+    "mtime": 1779206302.7589805,
+    "ast_hash": "70bdd0a673bcfc0e828080b306e7c680",
+    "semantic_hash": "70bdd0a673bcfc0e828080b306e7c680"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\vite.config.ts": {
+    "mtime": 1779207560.405465,
+    "ast_hash": "2ce29243bedfbf4e5bf643536abcccb3",
+    "semantic_hash": "2ce29243bedfbf4e5bf643536abcccb3"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\.vscode\\extensions.json": {
+    "mtime": 1779206302.7382925,
+    "ast_hash": "886c161c2f2d9388473a64033e7d1931",
+    "semantic_hash": "886c161c2f2d9388473a64033e7d1931"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\App.vue": {
+    "mtime": 1779207634.6023276,
+    "ast_hash": "40eb833a51aeb85f791cdde2209bcee5",
+    "semantic_hash": "40eb833a51aeb85f791cdde2209bcee5"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\main.ts": {
+    "mtime": 1779221443.2978225,
+    "ast_hash": "bc23eef9a1df1c0edf60d23c7dc2c131",
+    "semantic_hash": "bc23eef9a1df1c0edf60d23c7dc2c131"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\components\\chat\\MessageBubble.vue": {
+    "mtime": 1779222096.393787,
+    "ast_hash": "2b761be412896eef56c85b11dcb3a88e",
+    "semantic_hash": "2b761be412896eef56c85b11dcb3a88e"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\components\\chat\\MessageInput.vue": {
+    "mtime": 1779215285.9041567,
+    "ast_hash": "0d21ac9ad49847105318b9146a6a9d29",
+    "semantic_hash": "0d21ac9ad49847105318b9146a6a9d29"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\components\\chat\\MessageList.vue": {
+    "mtime": 1779381741.7446868,
+    "ast_hash": "29b4a6896016601e58de4ed73319ee80",
+    "semantic_hash": "29b4a6896016601e58de4ed73319ee80"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\components\\layout\\AppShell.vue": {
+    "mtime": 1779215245.191064,
+    "ast_hash": "d2e05d0473b823797056511a3e50b886",
+    "semantic_hash": "d2e05d0473b823797056511a3e50b886"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\components\\layout\\Sidebar.vue": {
+    "mtime": 1779290221.3133373,
+    "ast_hash": "3ed4f7275d3c3d07ea7f3d9a2cf67a71",
+    "semantic_hash": "3ed4f7275d3c3d07ea7f3d9a2cf67a71"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\components\\teams\\ConnectorCard.vue": {
+    "mtime": 1779220706.3692648,
+    "ast_hash": "ce61e06f361fb6100a938bcb3690beec",
+    "semantic_hash": "ce61e06f361fb6100a938bcb3690beec"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\components\\teams\\TeamsAvatar.vue": {
+    "mtime": 1779220698.771761,
+    "ast_hash": "1b9ddab55ad342386b88b44937a993d1",
+    "semantic_hash": "1b9ddab55ad342386b88b44937a993d1"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\composables\\useClaudeStream.ts": {
+    "mtime": 1779375119.017636,
+    "ast_hash": "9e05c9f15912bf1d31347143bbd38f54",
+    "semantic_hash": "9e05c9f15912bf1d31347143bbd38f54"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\router\\index.ts": {
+    "mtime": 1779209531.8941283,
+    "ast_hash": "fb36e1816066c30e78d95c09a09cc9ef",
+    "semantic_hash": "fb36e1816066c30e78d95c09a09cc9ef"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\stores\\chat.ts": {
+    "mtime": 1779290167.0194438,
+    "ast_hash": "2e0d1b6baede096119559d4dd73cd0a6",
+    "semantic_hash": "2e0d1b6baede096119559d4dd73cd0a6"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\stores\\projects.ts": {
+    "mtime": 1779221427.9768896,
+    "ast_hash": "ef6d23f816de31e6521b77e15b35872a",
+    "semantic_hash": "ef6d23f816de31e6521b77e15b35872a"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\stores\\settings.ts": {
+    "mtime": 1779467673.7472765,
+    "ast_hash": "434855202dbbaa461a3f844efa400e8c",
+    "semantic_hash": "434855202dbbaa461a3f844efa400e8c"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\stores\\teams.ts": {
+    "mtime": 1779218307.367932,
+    "ast_hash": "89a087ce9b40b7bb2dc9408cc5a70b7e",
+    "semantic_hash": "89a087ce9b40b7bb2dc9408cc5a70b7e"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\types\\index.ts": {
+    "mtime": 1779374971.2843451,
+    "ast_hash": "7b952f28f7956cfbd330f1d86d9ccd2a",
+    "semantic_hash": "7b952f28f7956cfbd330f1d86d9ccd2a"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\views\\ChatView.vue": {
+    "mtime": 1779375127.9320498,
+    "ast_hash": "88b2dfb8dd9310fc3baf53c86980a1ad",
+    "semantic_hash": "88b2dfb8dd9310fc3baf53c86980a1ad"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\views\\ProjectsView.vue": {
+    "mtime": 1779375158.9891088,
+    "ast_hash": "b9082c56006a5930e0ef1145c706274f",
+    "semantic_hash": "b9082c56006a5930e0ef1145c706274f"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\views\\SettingsView.vue": {
+    "mtime": 1779467762.7996514,
+    "ast_hash": "f73b8d25423b555f1b0ca943c06ade73",
+    "semantic_hash": "f73b8d25423b555f1b0ca943c06ade73"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\views\\TeamsView.vue": {
+    "mtime": 1779220703.0021322,
+    "ast_hash": "48a2b578e1a3a3779b535ea122746def",
+    "semantic_hash": "48a2b578e1a3a3779b535ea122746def"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\build.rs": {
+    "mtime": 1779206168.723476,
+    "ast_hash": "9e949d967099bcc42cfa6f8765a6c938",
+    "semantic_hash": "9e949d967099bcc42cfa6f8765a6c938"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\tauri.conf.json": {
+    "mtime": 1779207556.9328985,
+    "ast_hash": "24067b86267690253ac94153d3fda190",
+    "semantic_hash": "24067b86267690253ac94153d3fda190"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\capabilities\\default.json": {
+    "mtime": 1779206168.723476,
+    "ast_hash": "eaadc698fdc17d6a18f32c3f36a0349b",
+    "semantic_hash": "eaadc698fdc17d6a18f32c3f36a0349b"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\gen\\schemas\\acl-manifests.json": {
+    "mtime": 1779206223.3752444,
+    "ast_hash": "b849cb752c4dc91e746bca7e411dc9ae",
+    "semantic_hash": "b849cb752c4dc91e746bca7e411dc9ae"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\gen\\schemas\\capabilities.json": {
+    "mtime": 1779206223.3812537,
+    "ast_hash": "e04e99f1b01a6dfab195659570cb39f0",
+    "semantic_hash": "e04e99f1b01a6dfab195659570cb39f0"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\gen\\schemas\\desktop-schema.json": {
+    "mtime": 1779206223.3802543,
+    "ast_hash": "44a32f28e297a982b5b11885645d377b",
+    "semantic_hash": "44a32f28e297a982b5b11885645d377b"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\gen\\schemas\\windows-schema.json": {
+    "mtime": 1779206223.3802543,
+    "ast_hash": "44a32f28e297a982b5b11885645d377b",
+    "semantic_hash": "44a32f28e297a982b5b11885645d377b"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\src\\claude.rs": {
+    "mtime": 1779468262.7241938,
+    "ast_hash": "015f461961a79db99e8b1b592e12588f",
+    "semantic_hash": "015f461961a79db99e8b1b592e12588f"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\src\\lib.rs": {
+    "mtime": 1779467660.1332438,
+    "ast_hash": "7b5d7383a0d2b7c89d3229e5d2e61fa6",
+    "semantic_hash": "7b5d7383a0d2b7c89d3229e5d2e61fa6"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\src\\main.rs": {
+    "mtime": 1779206168.7309866,
+    "ast_hash": "744d17489cc4e580f67879b318b79029",
+    "semantic_hash": "744d17489cc4e580f67879b318b79029"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\src\\settings.rs": {
+    "mtime": 1779466495.7212508,
+    "ast_hash": "ceeb23d7360fc463d5a355b18cb6b468",
+    "semantic_hash": "ceeb23d7360fc463d5a355b18cb6b468"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\src\\teams.rs": {
+    "mtime": 1779218300.1449082,
+    "ast_hash": "f938839a0d2985bd708504f55b9e9f8c",
+    "semantic_hash": "f938839a0d2985bd708504f55b9e9f8c"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\index.html": {
+    "mtime": 1779206354.5782862,
+    "ast_hash": "4adbb842042da3925c0c4fdbff288a3a",
+    "semantic_hash": "4adbb842042da3925c0c4fdbff288a3a"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\README.md": {
+    "mtime": 1779206302.769156,
+    "ast_hash": "64ba9c1ddf7098960f302d6dcbd66522",
+    "semantic_hash": "64ba9c1ddf7098960f302d6dcbd66522"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\locus-logo.svg": {
+    "mtime": 1779219469.2321677,
+    "ast_hash": "435babdcb4fdb27008ddfa9757e95c94",
+    "semantic_hash": "435babdcb4fdb27008ddfa9757e95c94"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\public\\favicon.svg": {
+    "mtime": 1779206302.8049197,
+    "ast_hash": "7e840862161341271697daa99a40d76b",
+    "semantic_hash": "7e840862161341271697daa99a40d76b"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\public\\icons.svg": {
+    "mtime": 1779206302.8171923,
+    "ast_hash": "3b4fcfcf393eca4d264dca4a4663bc37",
+    "semantic_hash": "3b4fcfcf393eca4d264dca4a4663bc37"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\assets\\hero.png": {
+    "mtime": 1779206302.7861037,
+    "ast_hash": "aead493361b27e7510691c5d7072dfc1",
+    "semantic_hash": "aead493361b27e7510691c5d7072dfc1"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\assets\\locus-logo-dark.svg": {
+    "mtime": 1779220663.1797583,
+    "ast_hash": "c52d0d43c521b5c72240a453bb1ded76",
+    "semantic_hash": "c52d0d43c521b5c72240a453bb1ded76"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\assets\\locus-logo.svg": {
+    "mtime": 1779220656.604549,
+    "ast_hash": "435babdcb4fdb27008ddfa9757e95c94",
+    "semantic_hash": "435babdcb4fdb27008ddfa9757e95c94"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\assets\\vite.svg": {
+    "mtime": 1779206302.8401947,
+    "ast_hash": "9960a24288958394ac50e57ff638b036",
+    "semantic_hash": "9960a24288958394ac50e57ff638b036"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src\\assets\\vue.svg": {
+    "mtime": 1779206302.841187,
+    "ast_hash": "081c348d068770af78fcd90980521318",
+    "semantic_hash": "081c348d068770af78fcd90980521318"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\icons\\128x128.png": {
+    "mtime": 1779206168.7249787,
+    "ast_hash": "3a0071e4ad670fad0329d3a5e83d0bf9",
+    "semantic_hash": "3a0071e4ad670fad0329d3a5e83d0bf9"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\icons\\128x128@2x.png": {
+    "mtime": 1779206168.7249787,
+    "ast_hash": "eab2be12c5f8aeaf104a4695dd9171df",
+    "semantic_hash": "eab2be12c5f8aeaf104a4695dd9171df"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\icons\\32x32.png": {
+    "mtime": 1779206168.725982,
+    "ast_hash": "faf8ee6541b945b98db35239b8a75715",
+    "semantic_hash": "faf8ee6541b945b98db35239b8a75715"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\icons\\icon.png": {
+    "mtime": 1779206168.7299833,
+    "ast_hash": "9fdc4367276aafdd2c05ac214e9553c7",
+    "semantic_hash": "9fdc4367276aafdd2c05ac214e9553c7"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\icons\\Square107x107Logo.png": {
+    "mtime": 1779206168.725982,
+    "ast_hash": "d4bc38359e2c01daa08354c55fa4df7c",
+    "semantic_hash": "d4bc38359e2c01daa08354c55fa4df7c"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\icons\\Square142x142Logo.png": {
+    "mtime": 1779206168.725982,
+    "ast_hash": "1e9c0358705085439e5c989fcbd6e988",
+    "semantic_hash": "1e9c0358705085439e5c989fcbd6e988"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\icons\\Square150x150Logo.png": {
+    "mtime": 1779206168.7269816,
+    "ast_hash": "084d20bce8096367fc694dfdf72c8ac5",
+    "semantic_hash": "084d20bce8096367fc694dfdf72c8ac5"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\icons\\Square284x284Logo.png": {
+    "mtime": 1779206168.7269816,
+    "ast_hash": "6a936fe84398f24b7a63a36bddfd58d7",
+    "semantic_hash": "6a936fe84398f24b7a63a36bddfd58d7"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\icons\\Square30x30Logo.png": {
+    "mtime": 1779206168.7269816,
+    "ast_hash": "011e9cb456309157a9fc78c978248e00",
+    "semantic_hash": "011e9cb456309157a9fc78c978248e00"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\icons\\Square310x310Logo.png": {
+    "mtime": 1779206168.727983,
+    "ast_hash": "832231852e8e683e6aa2b690d194bdd2",
+    "semantic_hash": "832231852e8e683e6aa2b690d194bdd2"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\icons\\Square44x44Logo.png": {
+    "mtime": 1779206168.727983,
+    "ast_hash": "a06297a35014e770cc33756fafa3b3a8",
+    "semantic_hash": "a06297a35014e770cc33756fafa3b3a8"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\icons\\Square71x71Logo.png": {
+    "mtime": 1779206168.727983,
+    "ast_hash": "a3c80a0af688359094aa685881570eed",
+    "semantic_hash": "a3c80a0af688359094aa685881570eed"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\icons\\Square89x89Logo.png": {
+    "mtime": 1779206168.727983,
+    "ast_hash": "9f91ee8e1c1232ebde61c64d7923038f",
+    "semantic_hash": "9f91ee8e1c1232ebde61c64d7923038f"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\src-tauri\\icons\\StoreLogo.png": {
+    "mtime": 1779206168.728984,
+    "ast_hash": "387b412d411bbd532dd3302d3948bf0e",
+    "semantic_hash": "387b412d411bbd532dd3302d3948bf0e"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\.claude\\settings.json": {
+    "mtime": 1779472289.39518,
+    "ast_hash": "5d6ecd96cf065b16e8bb9fbf5d7d8f0d",
+    "semantic_hash": "5d6ecd96cf065b16e8bb9fbf5d7d8f0d"
+  },
+  "C:\\Users\\Zach\\source\\repos\\Locus\\CLAUDE.md": {
+    "mtime": 1779472289.3941813,
+    "ast_hash": "8a6643a420fdad6bfb583523bc6cef16",
+    "semantic_hash": "8a6643a420fdad6bfb583523bc6cef16"
+  }
+}
