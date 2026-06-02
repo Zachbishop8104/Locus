@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { Eye, EyeOff, Check, Key, Users, Loader2, LogOut, AlertCircle, ExternalLink, Cpu } from '@lucide/vue'
+import { Eye, EyeOff, Check, Key, Users, Loader2, LogOut, AlertCircle, ExternalLink, Cpu, Server, RefreshCw } from '@lucide/vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useTeamsStore } from '@/stores/teams'
 
@@ -10,6 +10,37 @@ const teams = useTeamsStore()
 const inputKey = ref(settings.apiKey)
 const showKey = ref(false)
 const saved = ref(false)
+
+const localModelUrl = ref(settings.localModelUrl)
+const localModelName = ref(settings.localModelName)
+const savedLocal = ref(false)
+const availableModels = ref<string[]>([])
+const fetchingModels = ref(false)
+const fetchModelsError = ref('')
+
+async function saveLocalModel() {
+  await settings.saveLocalModelUrl(localModelUrl.value.trim())
+  await settings.saveLocalModelName(localModelName.value.trim())
+  savedLocal.value = true
+  setTimeout(() => (savedLocal.value = false), 2000)
+}
+
+async function fetchModels() {
+  fetchingModels.value = true
+  fetchModelsError.value = ''
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const models = await invoke<string[]>('fetch_local_models', { baseUrl: localModelUrl.value.trim() })
+    availableModels.value = models
+    if (models.length > 0 && !models.includes(localModelName.value)) {
+      localModelName.value = models[0]
+    }
+  } catch (e) {
+    fetchModelsError.value = String(e)
+  } finally {
+    fetchingModels.value = false
+  }
+}
 
 const teamsClientId = ref('')
 const teamsTenantId = ref('')
@@ -122,6 +153,106 @@ async function disconnectTeams() {
             >
               <Check v-if="saved" :size="15" />
               {{ saved ? 'Saved!' : 'Save Key' }}
+            </button>
+          </template>
+        </section>
+
+        <div class="border-t border-border" />
+
+        <!-- ─── Local Model ─── -->
+        <section class="flex flex-col gap-4">
+          <div>
+            <h2 class="text-base font-semibold text-fg">Local Model</h2>
+            <p class="text-sm text-fg-subtle mt-1">
+              Use a local model via any OpenAI-compatible endpoint (Ollama, LM Studio, etc.).
+            </p>
+          </div>
+
+          <!-- Enable toggle -->
+          <div class="flex items-center justify-between p-4 rounded-xl border border-border-strong bg-surface/60">
+            <div class="flex items-center gap-3">
+              <Server :size="16" class="text-accent-icon shrink-0" />
+              <div>
+                <p class="text-sm font-medium text-fg">Use local model</p>
+                <p class="text-xs text-fg-subtle mt-0.5">
+                  Overrides Claude API and local Claude subscription.
+                </p>
+              </div>
+            </div>
+            <button
+              class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer"
+              :class="settings.useLocalModel ? 'bg-accent' : 'bg-border-strong'"
+              @click="settings.setUseLocalModel(!settings.useLocalModel)"
+            >
+              <span
+                class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
+                :class="settings.useLocalModel ? 'translate-x-6' : 'translate-x-1'"
+              />
+            </button>
+          </div>
+
+          <!-- Config fields (shown when enabled) -->
+          <template v-if="settings.useLocalModel">
+            <!-- Base URL + fetch button -->
+            <div class="flex flex-col gap-2">
+              <label class="text-xs font-medium text-fg-muted">Base URL</label>
+              <div class="flex gap-2">
+                <input
+                  v-model="localModelUrl"
+                  type="text"
+                  class="flex-1 bg-surface border border-border-strong rounded-lg px-3 py-2.5 text-sm text-fg placeholder-fg-subtle outline-none focus:border-accent/70 transition-colors font-mono"
+                  placeholder="http://localhost:11434/v1"
+                />
+                <button
+                  class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border border-border-strong text-fg-muted hover:text-fg hover:border-accent/60 transition-colors cursor-pointer shrink-0"
+                  :disabled="fetchingModels"
+                  @click="fetchModels"
+                >
+                  <RefreshCw :size="14" :class="fetchingModels ? 'animate-spin' : ''" />
+                  {{ fetchingModels ? 'Loading…' : 'Load models' }}
+                </button>
+              </div>
+              <p class="text-xs text-fg-faint">Ollama: http://localhost:11434/v1 · LM Studio: http://localhost:1234/v1</p>
+            </div>
+
+            <!-- Error from fetch -->
+            <div
+              v-if="fetchModelsError"
+              class="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-red-950/40 border border-red-700/50 text-red-400 text-xs"
+            >
+              <AlertCircle :size="13" class="shrink-0 mt-0.5" />
+              <span>{{ fetchModelsError }}</span>
+            </div>
+
+            <!-- Model picker: dropdown if models loaded, text input as fallback -->
+            <div class="flex flex-col gap-2">
+              <label class="text-xs font-medium text-fg-muted">Model</label>
+              <select
+                v-if="availableModels.length > 0"
+                v-model="localModelName"
+                class="w-full bg-surface border border-border-strong rounded-lg px-3 py-2.5 text-sm text-fg outline-none focus:border-accent/70 transition-colors cursor-pointer font-mono"
+              >
+                <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
+              </select>
+              <input
+                v-else
+                v-model="localModelName"
+                type="text"
+                class="w-full bg-surface border border-border-strong rounded-lg px-3 py-2.5 text-sm text-fg placeholder-fg-subtle outline-none focus:border-accent/70 transition-colors font-mono"
+                placeholder="llama3, mistral, qwen2.5-coder, …"
+              />
+              <p v-if="availableModels.length === 0" class="text-xs text-fg-faint">
+                Click "Load models" to fetch installed models, or type a name manually.
+              </p>
+            </div>
+
+            <button
+              class="flex items-center gap-2 w-fit px-4 py-2 rounded-lg text-sm font-medium transition-all cursor-pointer"
+              :class="savedLocal ? 'bg-emerald-700 text-white' : 'bg-accent hover:bg-accent-light text-white'"
+              @click="saveLocalModel"
+            >
+              <Check v-if="savedLocal" :size="15" />
+              {{ savedLocal ? 'Saved!' : 'Save' }}
             </button>
           </template>
         </section>

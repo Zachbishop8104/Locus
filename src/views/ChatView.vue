@@ -5,21 +5,17 @@ import { invoke } from '@tauri-apps/api/core'
 import { AlertTriangle } from '@lucide/vue'
 import MessageList from '@/components/chat/MessageList.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
-import EditApprovalCard from '@/components/chat/EditApprovalCard.vue'
 import { useChatStore } from '@/stores/chat'
 import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore } from '@/stores/projects'
 import { useClaudeStream } from '@/composables/useClaudeStream'
-import type { Project, EditRequest } from '@/types'
+import type { Project } from '@/types'
 
 const router = useRouter()
 const chat = useChatStore()
 const settings = useSettingsStore()
 const projects = useProjectsStore()
 const { isStreaming, toolActivity, streamMessage, cancel } = useClaudeStream()
-
-const editRequest = ref<EditRequest | null>(null)
-let resolveEdit: ((approved: boolean) => void) | null = null
 
 const streamingMessageId = computed(() => {
   if (!isStreaming.value || !chat.activeConversation) return null
@@ -60,7 +56,8 @@ function buildSystemPrompt(project: Project): string {
 
 async function autoRenameConversation(convId: string) {
   const conv = chat.conversations.find((c) => c.id === convId)
-  if (!conv || conv.messages.length !== 2 || !settings.apiKey) return
+  if (!conv || conv.messages.length !== 2) return
+  if (!settings.apiKey && !settings.useLocalModel && !settings.useLocalClaude) return
   try {
     const title = await invoke<string>('generate_title', {
       apiKey: settings.apiKey,
@@ -73,28 +70,8 @@ async function autoRenameConversation(convId: string) {
   }
 }
 
-function handleEditRequest(req: EditRequest): Promise<boolean> {
-  if (settings.autoApproveEdits) return Promise.resolve(true)
-  return new Promise((resolve) => {
-    editRequest.value = req
-    resolveEdit = resolve
-  })
-}
-
-function approveEdit() {
-  editRequest.value = null
-  resolveEdit?.(true)
-  resolveEdit = null
-}
-
-function denyEdit() {
-  editRequest.value = null
-  resolveEdit?.(false)
-  resolveEdit = null
-}
-
 async function sendMessage(text: string) {
-  if (!settings.apiKey) {
+  if (!settings.apiKey && !settings.useLocalModel && !settings.useLocalClaude) {
     router.push('/settings')
     return
   }
@@ -121,16 +98,10 @@ async function sendMessage(text: string) {
       chat.appendToLastMessage(convId!, err)
       chat.markLastMessageError(convId!)
     },
-    handleEditRequest,
     system,
     activeProject.value?.localPath,
     activeProject.value?.dbConnectionString,
   )
-}
-
-function handleCancel() {
-  denyEdit()
-  cancel()
 }
 </script>
 
@@ -138,7 +109,7 @@ function handleCancel() {
   <div class="flex flex-col h-full">
     <!-- No API key warning -->
     <div
-      v-if="settings.loaded && !settings.apiKey"
+      v-if="settings.loaded && !settings.apiKey && !settings.useLocalModel && !settings.useLocalClaude"
       class="flex items-center gap-2 mx-6 mt-4 px-4 py-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-sm"
     >
       <AlertTriangle :size="15" class="shrink-0" />
@@ -164,39 +135,24 @@ function handleCancel() {
           {{ chat.activeConversation?.title ?? 'New Chat' }}
         </h1>
       </div>
-      <div class="flex items-center gap-3 shrink-0 ml-4">
-        <Transition name="fade">
-          <span v-if="toolActivity" class="flex items-center gap-1.5 text-xs text-fg-subtle">
-            <span class="inline-block w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-            {{ toolActivity }}
-          </span>
-        </Transition>
-        <p class="text-xs text-fg-subtle">{{ settings.model }}</p>
-      </div>
+      <p class="text-xs text-fg-subtle shrink-0 ml-4">
+        {{ settings.useLocalModel ? (settings.localModelName || 'Local model') : settings.useLocalClaude ? 'Claude (local)' : settings.model }}
+      </p>
     </div>
 
     <!-- Messages -->
     <MessageList
       :messages="chat.activeConversation?.messages ?? []"
       :streaming-id="streamingMessageId"
+      :tool-activity="toolActivity"
     />
-
-    <!-- Inline edit approval card -->
-    <Transition name="card-slide">
-      <EditApprovalCard
-        v-if="editRequest"
-        :request="editRequest"
-        @approve="approveEdit"
-        @deny="denyEdit"
-      />
-    </Transition>
 
     <!-- Input -->
     <MessageInput
-      :disabled="!settings.apiKey"
+      :disabled="!settings.apiKey && !settings.useLocalModel && !settings.useLocalClaude"
       :streaming="isStreaming"
       @submit="sendMessage"
-      @cancel="handleCancel"
+      @cancel="cancel"
     />
   </div>
 </template>
@@ -209,15 +165,5 @@ function handleCancel() {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
-}
-
-.card-slide-enter-active,
-.card-slide-leave-active {
-  transition: opacity 0.15s ease, transform 0.15s ease;
-}
-.card-slide-enter-from,
-.card-slide-leave-to {
-  opacity: 0;
-  transform: translateY(6px);
 }
 </style>

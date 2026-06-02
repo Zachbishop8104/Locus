@@ -7,12 +7,13 @@ import type { Message } from '@/types'
 const props = defineProps<{
   message: Message
   streaming?: boolean
+  toolActivity?: string | null
 }>()
 
 const isAssistant = computed(() => props.message.role === 'assistant')
 
 const renderedContent = computed(() => {
-  if (!isAssistant.value) return null
+  if (!isAssistant.value) return ''
   return marked.parse(props.message.content || '') as string
 })
 
@@ -54,12 +55,32 @@ function formatTime(date: string | Date) {
         </div>
 
         <!-- Assistant: rendered markdown -->
-        <div
-          v-if="isAssistant"
-          class="prose prose-sm prose-invert claude-prose max-w-none"
-          :class="streaming ? 'streaming-cursor' : ''"
-          v-html="renderedContent"
-        />
+        <template v-if="isAssistant">
+          <!-- Tool activity status (shown while streaming, before/during text) -->
+          <div
+            v-if="streaming && toolActivity"
+            class="flex items-center gap-2 text-xs text-fg-subtle mb-2"
+          >
+            <span class="inline-block w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse shrink-0" />
+            <span>{{ toolActivity }}</span>
+          </div>
+
+          <!-- Thinking / empty streaming state -->
+          <div
+            v-if="streaming && !message.content && !toolActivity"
+            class="flex items-center gap-2 text-xs text-fg-subtle"
+          >
+            <span class="inline-block w-1.5 h-1.5 rounded-full bg-accent/60 animate-pulse" />
+            <span>Thinking…</span>
+          </div>
+
+          <div
+            v-if="message.content"
+            class="prose prose-sm prose-invert claude-prose max-w-none"
+            :class="streaming && !toolActivity ? 'streaming-cursor' : ''"
+            v-html="renderedContent"
+          />
+        </template>
 
         <!-- User: plain text -->
         <p v-else class="whitespace-pre-wrap m-0">{{ message.content }}</p>

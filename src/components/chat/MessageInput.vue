@@ -65,7 +65,14 @@ function autoResize(e: Event) {
       <div class="flex items-center justify-between px-3 pb-2.5">
         <!-- Left: model + permission mode -->
         <div class="flex items-center gap-2">
+          <span
+            v-if="settings.useLocalModel"
+            class="text-xs text-fg-muted border border-border-strong rounded-md px-2 py-1"
+          >
+            {{ settings.localModelName || 'Local model' }}
+          </span>
           <select
+            v-else
             v-model="settings.model"
             class="text-xs text-fg-muted bg-transparent border border-border-strong rounded-md px-2 py-1 outline-none hover:border-border-strong cursor-pointer transition-colors"
             :disabled="disabled || streaming"

@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { usePendingEditStore } from '@/stores/pendingEdit'
 import type { Message, EditRequest } from '@/types'
 
 interface ToolUsePayload {
@@ -27,11 +28,12 @@ export function useClaudeStream() {
     onDelta: (text: string) => void,
     onDone: () => void,
     onError: (err: string) => void,
-    onEditRequest: (req: EditRequest) => Promise<boolean>,
     system?: string,
     projectPath?: string,
     dbConnectionString?: string,
   ) {
+    const pendingEdit = usePendingEditStore()
+    pendingEdit.registerCallbacks(cancel, onDelta)
     await cleanup()
     isStreaming.value = true
 
@@ -40,31 +42,18 @@ export function useClaudeStream() {
 
       await listen<ToolUsePayload>('claude:tool_use', (e) => {
         const { name, input } = e.payload
-        if (name === 'read_file') {
-          toolActivity.value = `Reading ${input.path}`
-        } else if (name === 'list_files') {
-          toolActivity.value = `Listing ${input.path ?? '.'}`
-        } else if (name === 'search_code') {
-          toolActivity.value = `Searching for "${input.pattern}"`
-        } else if (name === 'write_file') {
-          toolActivity.value = `Proposing edit to ${input.path}`
-        } else if (name === 'get_database_schema') {
-          toolActivity.value = 'Reading database schema'
-        } else if (name === 'query_database') {
-          toolActivity.value = 'Querying database'
-        } else {
-          toolActivity.value = name
-        }
+        if (name === 'read_file') toolActivity.value = `Reading ${input.path}`
+        else if (name === 'list_files') toolActivity.value = `Listing ${input.path ?? '.'}`
+        else if (name === 'search_code') toolActivity.value = `Searching for "${input.pattern}"`
+        else if (name === 'write_file') toolActivity.value = `Proposing edit to ${input.path}`
+        else if (name === 'get_database_schema') toolActivity.value = 'Reading database schema'
+        else if (name === 'query_database') toolActivity.value = 'Querying database'
+        else toolActivity.value = name
       }),
 
-      // Non-blocking: emit fires, card shows, streaming continues unblocked.
-      // confirm_write is called only after the user clicks Yes or No.
       await listen<EditRequest>('claude:edit_request', (e) => {
-        const req = e.payload
         toolActivity.value = null
-        onEditRequest(req).then(async (approved) => {
-          await invoke('confirm_write', { toolUseId: req.toolUseId, approved }).catch(() => {})
-        })
+        pendingEdit.set(e.payload)
       }),
 
       await listen<void>('claude:done', async () => {

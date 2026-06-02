@@ -1,11 +1,11 @@
-mod claude;
+mod agent;
 mod settings;
 mod teams;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .manage(claude::PendingWriteState::new())
+        .manage(agent::PendingWriteState::new())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -17,14 +17,21 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            claude::stream_message,
-            claude::generate_title,
-            claude::confirm_write,
-            claude::pick_folder,
+            agent::stream_message,
+            agent::generate_title,
+            agent::confirm_write,
+            agent::pick_folder,
+            agent::fetch_local_models,
             settings::get_api_key,
             settings::set_api_key,
             settings::get_use_local_claude,
             settings::set_use_local_claude,
+            settings::get_use_local_model,
+            settings::set_use_local_model,
+            settings::get_local_model_url,
+            settings::set_local_model_url,
+            settings::get_local_model_name,
+            settings::set_local_model_name,
             teams::start_teams_auth,
             teams::get_teams_status,
             teams::get_teams_credentials,

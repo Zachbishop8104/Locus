@@ -54,3 +54,47 @@ pub fn set_use_local_claude(app: AppHandle, enabled: bool) -> Result<(), String>
     config["use_local_claude"] = serde_json::Value::Bool(enabled);
     write_config(&app, config)
 }
+
+#[tauri::command]
+pub fn get_use_local_model(app: AppHandle) -> bool {
+    read_config(&app)["use_local_model"]
+        .as_bool()
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+pub fn set_use_local_model(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut config = read_config(&app);
+    config["use_local_model"] = serde_json::Value::Bool(enabled);
+    write_config(&app, config)
+}
+
+#[tauri::command]
+pub fn get_local_model_url(app: AppHandle) -> String {
+    read_config(&app)["local_model_url"]
+        .as_str()
+        .unwrap_or("http://localhost:11434/v1")
+        .to_string()
+}
+
+#[tauri::command]
+pub fn set_local_model_url(app: AppHandle, url: String) -> Result<(), String> {
+    let mut config = read_config(&app);
+    config["local_model_url"] = serde_json::Value::String(url);
+    write_config(&app, config)
+}
+
+#[tauri::command]
+pub fn get_local_model_name(app: AppHandle) -> String {
+    read_config(&app)["local_model_name"]
+        .as_str()
+        .unwrap_or("")
+        .to_string()
+}
+
+#[tauri::command]
+pub fn set_local_model_name(app: AppHandle, name: String) -> Result<(), String> {
+    let mut config = read_config(&app);
+    config["local_model_name"] = serde_json::Value::String(name);
+    write_config(&app, config)
+}

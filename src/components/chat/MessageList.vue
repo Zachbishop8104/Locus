@@ -6,6 +6,7 @@ import type { Message } from '@/types'
 const props = defineProps<{
   messages: Message[]
   streamingId?: string | null
+  toolActivity?: string | null
 }>()
 
 const scrollEl = ref<HTMLElement | null>(null)
@@ -42,6 +43,7 @@ watch(
       :key="msg.id"
       :message="msg"
       :streaming="msg.id === streamingId"
+      :tool-activity="msg.id === streamingId ? toolActivity : null"
     />
   </div>
 </template>
