@@ -19,9 +19,12 @@ const { isStreaming, toolActivity, streamMessage, cancel } = useClaudeStream()
 
 const streamingMessageId = computed(() => {
   if (!isStreaming.value || !chat.activeConversation) return null
+  // Always highlight the last message while streaming, regardless of which turn it is
   const msgs = chat.activeConversation.messages
-  const last = msgs[msgs.length - 1]
-  return last?.role === 'assistant' ? last.id : null
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === 'assistant') return msgs[i].id
+  }
+  return null
 })
 
 const activeProject = computed<Project | undefined>(() =>
@@ -84,6 +87,7 @@ async function sendMessage(text: string) {
 
   const messages = chat.activeConversation!.messages
     .slice(0, -1)
+    .filter((m) => !m.cancelled)
     .map((m) => ({ role: m.role, content: m.content }))
 
   const system = activeProject.value ? buildSystemPrompt(activeProject.value) : undefined
@@ -98,10 +102,26 @@ async function sendMessage(text: string) {
       chat.appendToLastMessage(convId!, err)
       chat.markLastMessageError(convId!)
     },
+    () => {
+      // Only open a new bubble if the current one has content.
+      // If the model went straight to a tool tag the bubble is empty — reuse it.
+      const msgs = chat.activeConversation?.messages ?? []
+      const last = msgs[msgs.length - 1]
+      if (last?.role === 'assistant' && last.content.trim()) {
+        chat.addMessage(convId!, { role: 'assistant', content: '', timestamp: new Date().toISOString() })
+      }
+    },
     system,
     activeProject.value?.localPath,
     activeProject.value?.dbConnectionString,
   )
+}
+
+function handleCancel() {
+  cancel()
+  // Remove the partial assistant message so it doesn't get sent as context
+  // in the next message — otherwise the model "picks up where it left off".
+  if (chat.activeId) chat.removeLastMessage(chat.activeId)
 }
 </script>
 
@@ -152,7 +172,7 @@ async function sendMessage(text: string) {
       :disabled="!settings.apiKey && !settings.useLocalModel && !settings.useLocalClaude"
       :streaming="isStreaming"
       @submit="sendMessage"
-      @cancel="cancel"
+      @cancel="handleCancel"
     />
   </div>
 </template>

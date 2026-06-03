@@ -13,7 +13,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use interceptor::TagInterceptor;
 use stream::{stream_turn_claude_api, stream_turn_local_claude, stream_turn_openai_compat};
-use tools::{execute_action, tool_system_prompt};
+use tools::{action_to_input, api_system_prompt, anthropic_tools_schema, execute_action, openai_tools_schema, tool_system_prompt};
 
 // ─── Shared State ─────────────────────────────────────────────────────────────
 
@@ -30,6 +30,19 @@ impl PendingWriteState {
     }
 }
 
+// Each write action creates a oneshot channel. write_file_tool awaits the
+// receiver; confirm_write fires the sender. This blocks the agent loop until
+// the user approves or rejects — enforcing one change at a time.
+pub struct ApprovalWaiter(
+    pub Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
+);
+
+impl ApprovalWaiter {
+    pub fn new() -> Self {
+        ApprovalWaiter(Arc::new(Mutex::new(HashMap::new())))
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Message {
     pub role: String,
@@ -41,6 +54,7 @@ pub struct Message {
 #[tauri::command]
 pub async fn confirm_write(
     state: tauri::State<'_, PendingWriteState>,
+    waiter: tauri::State<'_, ApprovalWaiter>,
     tool_use_id: String,
     approved: bool,
 ) -> Result<(), String> {
@@ -52,6 +66,10 @@ pub async fn confirm_write(
             }
             fs::write(&e.path, &e.content).map_err(|e| e.to_string())?;
         }
+    }
+    // Unblock the waiting execute_action
+    if let Some(tx) = waiter.0.lock().unwrap().remove(&tool_use_id) {
+        let _ = tx.send(approved);
     }
     Ok(())
 }
@@ -70,60 +88,136 @@ pub async fn stream_message(
     let use_local_model = config["use_local_model"].as_bool().unwrap_or(false);
     let use_local_claude = config["use_local_claude"].as_bool().unwrap_or(false);
 
-    let tool_prompt = tool_system_prompt(project_path.is_some(), db_connection_string.is_some());
-    let effective_system = match &system {
-        Some(s) if !s.is_empty() => format!("{}\n\n{}", tool_prompt, s),
-        _ => tool_prompt,
+    let has_files = project_path.is_some();
+    let has_db    = db_connection_string.is_some();
+
+    // System prompts: API paths use a simple prose prompt (tools sent natively);
+    // local Claude CLI keeps the tag-based prompt.
+    let cli_system = {
+        let tag_prompt = tool_system_prompt(has_files, has_db);
+        match &system {
+            Some(s) if !s.is_empty() => format!("{}\n\n{}", tag_prompt, s),
+            _ => tag_prompt,
+        }
     };
+    let api_sys = api_system_prompt(system.as_deref());
 
     let (local_url, local_key, local_model_name) = if use_local_model {
-        (
-            config["local_model_url"].as_str().unwrap_or("http://localhost:11434/v1").to_string(),
-            config["local_model_api_key"].as_str().map(|s| s.to_string()),
-            config["local_model_name"].as_str().unwrap_or("llama3").to_string(),
-        )
+        let url  = config["local_model_url"].as_str().unwrap_or("http://localhost:11434/v1").to_string();
+        let key  = config["local_model_api_key"].as_str().map(|s| s.to_string());
+        let name = config["local_model_name"].as_str().unwrap_or("llama3").to_string();
+        (url, key, name)
     } else {
         (String::new(), None, String::new())
     };
 
-    let root = project_path.as_deref().unwrap_or("").to_string();
+    let root    = project_path.as_deref().unwrap_or("").to_string();
     let db_conn = db_connection_string.clone();
     let pending = app.state::<PendingWriteState>().0.clone();
-    let client = Client::new();
+    let waiter  = app.state::<ApprovalWaiter>().0.clone();
+    let client  = Client::new();
+
+    // Tool schemas for native tool-calling paths.
+    let oai_tools = openai_tools_schema(has_files, has_db);
+    let ant_tools = anthropic_tools_schema(has_files, has_db);
 
     let mut conv: Vec<serde_json::Value> = messages.iter()
         .map(|m| json!({"role": m.role, "content": m.content}))
         .collect();
 
+    let mut first_turn = true;
     loop {
-        let mut interceptor = TagInterceptor::new();
+        if !first_turn { let _ = app.emit("claude:new_turn", ()); }
+        first_turn = false;
 
-        let visible = if use_local_model {
-            let mut msgs = vec![json!({"role": "system", "content": effective_system})];
+        let (visible, calls) = if use_local_model {
+            // Prepend system message for OpenAI-compat format.
+            let mut msgs = vec![json!({"role": "system", "content": api_sys})];
             msgs.extend_from_slice(&conv);
-            stream_turn_openai_compat(&app, &client, &local_url, local_key.as_deref(), &local_model_name, &msgs, &mut interceptor).await?
+            stream_turn_openai_compat(&app, &client, &local_url, local_key.as_deref(), &local_model_name, &msgs, &oai_tools).await?
         } else if use_local_claude {
-            stream_turn_local_claude(&app, &conv, &model, &effective_system, &mut interceptor).await?
+            let mut interceptor = TagInterceptor::new();
+            stream_turn_local_claude(&app, &conv, &model, &cli_system, &mut interceptor).await?
         } else {
-            stream_turn_claude_api(&app, &client, &api_key, &model, &effective_system, &conv, &mut interceptor).await?
+            stream_turn_claude_api(&app, &client, &api_key, &model, &api_sys, &conv, &ant_tools).await?
         };
 
-        let actions = interceptor.take_actions();
-
-        if actions.is_empty() {
+        if calls.is_empty() {
             let _ = app.emit("claude:done", ());
             return Ok(());
         }
 
-        conv.push(json!({"role": "assistant", "content": visible}));
-
-        let mut results: Vec<String> = Vec::new();
-        for action in &actions {
-            let _ = app.emit("claude:tool_use", action.to_tool_use_event());
-            let result = execute_action(action, &root, db_conn.as_deref(), &app, pending.clone()).await;
-            results.push(format!("[locus:{}]\n{}", action.name, result));
+        // Push assistant message in provider-specific format so the model
+        // receives proper context on the next turn.
+        if use_local_model {
+            let tool_calls_json: Vec<serde_json::Value> = calls.iter().map(|c| json!({
+                "id": c.id,
+                "type": "function",
+                "function": {
+                    "name": format!("locus_{}", c.action.name),
+                    "arguments": serde_json::to_string(&action_to_input(&c.action)).unwrap_or_default()
+                }
+            })).collect();
+            conv.push(json!({
+                "role": "assistant",
+                "content": if visible.is_empty() { serde_json::Value::Null } else { json!(visible) },
+                "tool_calls": tool_calls_json
+            }));
+        } else if use_local_claude {
+            conv.push(json!({"role": "assistant", "content": visible}));
+        } else {
+            // Claude API: content array with text + tool_use blocks.
+            let mut content: Vec<serde_json::Value> = Vec::new();
+            if !visible.is_empty() { content.push(json!({"type": "text", "text": visible})); }
+            for c in &calls {
+                content.push(json!({
+                    "type": "tool_use",
+                    "id": c.id,
+                    "name": format!("locus_{}", c.action.name),
+                    "input": action_to_input(&c.action)
+                }));
+            }
+            conv.push(json!({"role": "assistant", "content": content}));
         }
-        conv.push(json!({"role": "user", "content": results.join("\n\n")}));
+
+        // Execute each tool call and collect results.
+        let mut results: Vec<String> = Vec::new();
+        for call in &calls {
+            let _ = app.emit("claude:tool_use", call.action.to_tool_use_event());
+            let result = execute_action(
+                &call.action, &root, db_conn.as_deref(), &app,
+                pending.clone(), waiter.clone(),
+            ).await;
+            if result == "__REJECTED__" {
+                let _ = app.emit("claude:done", ());
+                return Ok(());
+            }
+            let label = match call.action.name.as_str() {
+                "read"   => format!("Contents of {}", call.action.content.trim().lines().next().unwrap_or("file")),
+                "list"   => "Project files".to_string(),
+                "search" => format!("Search results for \"{}\"", call.action.content.trim()),
+                "schema" => "Database schema".to_string(),
+                "query"  => "Query results".to_string(),
+                other    => format!("{} result", other),
+            };
+            results.push(format!("=== {} ===\n{}", label, result));
+        }
+
+        // Inject tool results in provider-specific format.
+        if use_local_model {
+            // One `tool` role message per result.
+            for (call, result) in calls.iter().zip(&results) {
+                conv.push(json!({"role": "tool", "tool_call_id": call.id, "content": result}));
+            }
+        } else if use_local_claude {
+            conv.push(json!({"role": "user", "content": results.join("\n\n")}));
+        } else {
+            // Claude API: single user message with tool_result blocks.
+            let tool_results: Vec<serde_json::Value> = calls.iter().zip(&results)
+                .map(|(c, r)| json!({"type": "tool_result", "tool_use_id": c.id, "content": r}))
+                .collect();
+            conv.push(json!({"role": "user", "content": tool_results}));
+        }
     }
 }
 

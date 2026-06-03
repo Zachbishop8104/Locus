@@ -40,6 +40,7 @@ watch(
 
     <MessageBubble
       v-for="msg in messages"
+      v-show="msg.content.trim() || msg.id === streamingId"
       :key="msg.id"
       :message="msg"
       :streaming="msg.id === streamingId"

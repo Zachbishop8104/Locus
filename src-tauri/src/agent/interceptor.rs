@@ -1,5 +1,11 @@
 use serde_json::json;
 
+/// A tool call resolved from either native API tool-use or a parsed locus tag.
+pub(crate) struct NativeCall {
+    pub id: String,
+    pub action: ParsedAction,
+}
+
 pub(crate) struct ParsedAction {
     pub name: String,    // "read" | "write" | "search" | "list" | "query"
     pub content: String, // trimmed content between the tags
@@ -22,6 +28,7 @@ impl ParsedAction {
             "search" => json!({"name": "search_code",      "input": {"pattern": self.content.trim()}}),
             "list"   => json!({"name": "list_files",       "input": {"path":    self.content.trim()}}),
             "query"  => json!({"name": "query_database",   "input": {"query":   self.content.trim()}}),
+            "schema" => json!({"name": "get_database_schema", "input": {}}),
             other    => json!({"name": other, "input": {}}),
         }
     }
@@ -104,6 +111,10 @@ impl TagInterceptor {
         let out = if let State::MaybeTag { buf } = &self.state { buf.clone() } else { String::new() };
         self.state = State::Normal;
         out
+    }
+
+    pub fn has_actions(&self) -> bool {
+        !self.actions.is_empty()
     }
 
     pub fn take_actions(&mut self) -> Vec<ParsedAction> {

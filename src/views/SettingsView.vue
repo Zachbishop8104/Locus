@@ -224,7 +224,6 @@ async function disconnectTeams() {
               <span>{{ fetchModelsError }}</span>
             </div>
 
-            <!-- Model picker: dropdown if models loaded, text input as fallback -->
             <div class="flex flex-col gap-2">
               <label class="text-xs font-medium text-fg-muted">Model</label>
               <select
@@ -232,6 +231,7 @@ async function disconnectTeams() {
                 v-model="localModelName"
                 class="w-full bg-surface border border-border-strong rounded-lg px-3 py-2.5 text-sm text-fg outline-none focus:border-accent/70 transition-colors cursor-pointer font-mono"
               >
+                <option value="">— none —</option>
                 <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
               </select>
               <input
@@ -239,12 +239,10 @@ async function disconnectTeams() {
                 v-model="localModelName"
                 type="text"
                 class="w-full bg-surface border border-border-strong rounded-lg px-3 py-2.5 text-sm text-fg placeholder-fg-subtle outline-none focus:border-accent/70 transition-colors font-mono"
-                placeholder="llama3, mistral, qwen2.5-coder, …"
+                placeholder="qwen3:14b"
               />
-              <p v-if="availableModels.length === 0" class="text-xs text-fg-faint">
-                Click "Load models" to fetch installed models, or type a name manually.
-              </p>
             </div>
+
 
             <button
               class="flex items-center gap-2 w-fit px-4 py-2 rounded-lg text-sm font-medium transition-all cursor-pointer"

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '@/stores/settings'
+import { useChatStore } from '@/stores/chat'
 import type { EditRequest } from '@/types'
 
 export const usePendingEditStore = defineStore('pendingEdit', () => {
@@ -30,6 +31,9 @@ export const usePendingEditStore = defineStore('pendingEdit', () => {
     await invoke('confirm_write', { toolUseId, approved }).catch(() => {})
     if (!approved) {
       appendFn?.(`*Proposed edit to \`${filePath}\` — rejected.*`)
+      // Mark the message so it's excluded from future API context
+      const chat = useChatStore()
+      if (chat.activeId) chat.markLastMessageCancelled(chat.activeId)
       cancelFn?.()
       cancelFn = null
       appendFn = null

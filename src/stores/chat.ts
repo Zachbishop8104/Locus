@@ -44,6 +44,21 @@ export const useChatStore = defineStore('chat', () => {
     conv.messages[conv.messages.length - 1].content += text
   }
 
+  function markLastMessageCancelled(conversationId: string) {
+    const conv = conversations.value.find((c) => c.id === conversationId)
+    if (!conv || conv.messages.length === 0) return
+    const last = conv.messages[conv.messages.length - 1]
+    if (last.role === 'assistant') last.cancelled = true
+  }
+
+  function removeLastMessage(conversationId: string) {
+    const conv = conversations.value.find((c) => c.id === conversationId)
+    if (!conv || conv.messages.length === 0) return
+    if (conv.messages[conv.messages.length - 1].role === 'assistant') {
+      conv.messages.pop()
+    }
+  }
+
   function markLastMessageError(conversationId: string) {
     const conv = conversations.value.find((c) => c.id === conversationId)
     if (!conv || conv.messages.length === 0) return
@@ -76,6 +91,8 @@ export const useChatStore = defineStore('chat', () => {
     selectConversation,
     addMessage,
     appendToLastMessage,
+    removeLastMessage,
+    markLastMessageCancelled,
     markLastMessageError,
     renameConversation,
     deleteConversation,

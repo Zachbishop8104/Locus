@@ -1,12 +1,14 @@
+use std::collections::HashMap;
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde_json::json;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 
-use super::interceptor::TagInterceptor;
+use super::interceptor::{NativeCall, TagInterceptor};
+use super::tools::native_tool_to_action;
 
-// ─── Claude API ───────────────────────────────────────────────────────────────
+// ─── Claude API (native tool use) ─────────────────────────────────────────────
 
 pub(crate) async fn stream_turn_claude_api(
     app: &AppHandle,
@@ -15,15 +17,18 @@ pub(crate) async fn stream_turn_claude_api(
     model: &str,
     system: &str,
     messages: &[serde_json::Value],
-    interceptor: &mut TagInterceptor,
-) -> Result<String, String> {
-    let body = json!({
+    tools: &[serde_json::Value],
+) -> Result<(String, Vec<NativeCall>), String> {
+    let mut body = json!({
         "model": model,
         "max_tokens": 8096,
         "stream": true,
         "system": system,
         "messages": messages,
     });
+    if !tools.is_empty() {
+        body["tools"] = json!(tools);
+    }
 
     let response = client
         .post("https://api.anthropic.com/v1/messages")
@@ -47,17 +52,76 @@ pub(crate) async fn stream_turn_claude_api(
         return Err(msg);
     }
 
-    process_sse(app, response, interceptor, |event| {
-        if event["type"].as_str() == Some("content_block_delta") {
-            event["delta"]["text"].as_str().map(|s| s.to_string())
-        } else {
-            None
+    // Per-block state: "text" blocks stream to the user; "tool_use" blocks
+    // accumulate JSON that we parse at the end.
+    struct Block { kind: String, id: String, name: String, buf: String }
+    let mut blocks: HashMap<usize, Block> = HashMap::new();
+    let mut visible = String::new();
+    let mut stream = response.bytes_stream();
+    let mut sse_buf = String::new();
+
+    'outer: while let Some(chunk) = stream.next().await {
+        let bytes = chunk.map_err(|e| e.to_string())?;
+        sse_buf.push_str(&String::from_utf8_lossy(&bytes));
+
+        while let Some(pos) = sse_buf.find('\n') {
+            let line = sse_buf[..pos].trim().to_string();
+            sse_buf = sse_buf[pos + 1..].to_string();
+            let data = match line.strip_prefix("data: ") {
+                Some(d) if d == "[DONE]" => break 'outer,
+                Some(d) => d.to_string(),
+                _ => continue,
+            };
+            let Ok(ev) = serde_json::from_str::<serde_json::Value>(&data) else { continue };
+
+            match ev["type"].as_str() {
+                Some("content_block_start") => {
+                    let idx  = ev["index"].as_u64().unwrap_or(0) as usize;
+                    let cb   = &ev["content_block"];
+                    let kind = cb["type"].as_str().unwrap_or("text").to_string();
+                    let id   = cb["id"].as_str().unwrap_or("").to_string();
+                    let name = cb["name"].as_str().unwrap_or("").to_string();
+                    blocks.insert(idx, Block { kind, id, name, buf: String::new() });
+                }
+                Some("content_block_delta") => {
+                    let idx = ev["index"].as_u64().unwrap_or(0) as usize;
+                    let delta = &ev["delta"];
+                    if let Some(block) = blocks.get_mut(&idx) {
+                        match block.kind.as_str() {
+                            "text" => {
+                                if let Some(text) = delta["text"].as_str() {
+                                    block.buf.push_str(text);
+                                    visible.push_str(text);
+                                    let _ = app.emit("claude:delta", text);
+                                }
+                            }
+                            "tool_use" => {
+                                if let Some(partial) = delta["partial_json"].as_str() {
+                                    block.buf.push_str(partial);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Some("message_stop") => break 'outer,
+                _ => {}
+            }
         }
-    })
-    .await
+    }
+
+    let calls: Vec<NativeCall> = blocks.into_values()
+        .filter(|b| b.kind == "tool_use")
+        .filter_map(|b| {
+            let args: serde_json::Value = serde_json::from_str(&b.buf).unwrap_or(json!({}));
+            native_tool_to_action(&b.name, &args).map(|action| NativeCall { id: b.id, action })
+        })
+        .collect();
+
+    Ok((visible, calls))
 }
 
-// ─── OpenAI-compatible ────────────────────────────────────────────────────────
+// ─── OpenAI-compatible (Ollama, LM Studio, etc.) ─────────────────────────────
 
 pub(crate) async fn stream_turn_openai_compat(
     app: &AppHandle,
@@ -66,10 +130,14 @@ pub(crate) async fn stream_turn_openai_compat(
     api_key: Option<&str>,
     model: &str,
     messages: &[serde_json::Value],
-    interceptor: &mut TagInterceptor,
-) -> Result<String, String> {
+    tools: &[serde_json::Value],
+) -> Result<(String, Vec<NativeCall>), String> {
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let body = json!({ "model": model, "messages": messages, "stream": true });
+    let mut body = json!({ "model": model, "messages": messages, "stream": true });
+    if !tools.is_empty() {
+        body["tools"] = json!(tools);
+        body["tool_choice"] = json!("auto");
+    }
 
     let mut req = client.post(&url).header("content-type", "application/json");
     if let Some(key) = api_key {
@@ -90,15 +158,61 @@ pub(crate) async fn stream_turn_openai_compat(
         return Err(msg);
     }
 
-    process_sse(app, response, interceptor, |event| {
-        event["choices"].as_array()?.first()
-            .and_then(|c| c["delta"]["content"].as_str())
-            .map(|s| s.to_string())
-    })
-    .await
+    let mut stream = response.bytes_stream();
+    let mut sse_buf = String::new();
+    let mut visible = String::new();
+    // index -> (id, name, accumulated_arguments)
+    let mut partial_calls: HashMap<usize, (String, String, String)> = HashMap::new();
+
+    'outer: while let Some(chunk) = stream.next().await {
+        let bytes = chunk.map_err(|e| e.to_string())?;
+        sse_buf.push_str(&String::from_utf8_lossy(&bytes));
+
+        while let Some(pos) = sse_buf.find('\n') {
+            let line = sse_buf[..pos].trim().to_string();
+            sse_buf = sse_buf[pos + 1..].to_string();
+            let data = match line.strip_prefix("data: ") {
+                Some(d) if d == "[DONE]" => break 'outer,
+                Some(d) => d.to_string(),
+                _ => continue,
+            };
+            let Ok(ev) = serde_json::from_str::<serde_json::Value>(&data) else { continue };
+            let Some(choice) = ev["choices"].as_array().and_then(|a| a.first()) else { continue };
+            let delta = &choice["delta"];
+
+            // Text content
+            if let Some(text) = delta["content"].as_str() {
+                if !text.is_empty() {
+                    visible.push_str(text);
+                    let _ = app.emit("claude:delta", text);
+                }
+            }
+
+            // Tool call deltas — accumulate by index
+            if let Some(tc_arr) = delta["tool_calls"].as_array() {
+                for tc in tc_arr {
+                    let idx = tc["index"].as_u64().unwrap_or(0) as usize;
+                    let entry = partial_calls.entry(idx).or_default();
+                    if let Some(id)   = tc["id"].as_str()                   { entry.0 = id.to_string(); }
+                    if let Some(name) = tc["function"]["name"].as_str()      { entry.1 = name.to_string(); }
+                    if let Some(args) = tc["function"]["arguments"].as_str() { entry.2.push_str(args); }
+                }
+            }
+        }
+    }
+
+    let mut sorted: Vec<_> = partial_calls.into_iter().collect();
+    sorted.sort_by_key(|(idx, _)| *idx);
+
+    let calls: Vec<NativeCall> = sorted.into_iter().filter_map(|(_, (id, name, args_str))| {
+        let args: serde_json::Value = serde_json::from_str(&args_str).unwrap_or(json!({}));
+        native_tool_to_action(&name, &args).map(|action| NativeCall { id, action })
+    }).collect();
+
+    Ok((visible, calls))
 }
 
-// ─── Local Claude CLI ─────────────────────────────────────────────────────────
+// ─── Local Claude CLI (tag-based fallback) ────────────────────────────────────
 
 pub(crate) async fn stream_turn_local_claude(
     app: &AppHandle,
@@ -106,7 +220,7 @@ pub(crate) async fn stream_turn_local_claude(
     model: &str,
     system: &str,
     interceptor: &mut TagInterceptor,
-) -> Result<String, String> {
+) -> Result<(String, Vec<NativeCall>), String> {
     // Encode conversation history into the system prompt (CLI is single-turn).
     let mut context = system.to_string();
     if messages.len() > 1 {
@@ -164,6 +278,7 @@ pub(crate) async fn stream_turn_local_claude(
                         visible.push_str(&to_emit);
                         let _ = app.emit("claude:delta", to_emit);
                     }
+                    if interceptor.has_actions() { break; }
                 }
             }
         }
@@ -182,54 +297,17 @@ pub(crate) async fn stream_turn_local_claude(
         return Err(msg);
     }
 
-    emit_tail(app, interceptor, &mut visible);
-    Ok(visible)
-}
-
-// ─── Shared SSE loop ──────────────────────────────────────────────────────────
-
-async fn process_sse(
-    app: &AppHandle,
-    response: reqwest::Response,
-    interceptor: &mut TagInterceptor,
-    extract: impl Fn(&serde_json::Value) -> Option<String>,
-) -> Result<String, String> {
-    let mut stream = response.bytes_stream();
-    let mut buf = String::new();
-    let mut visible = String::new();
-
-    while let Some(chunk) = stream.next().await {
-        let bytes = chunk.map_err(|e| e.to_string())?;
-        buf.push_str(&String::from_utf8_lossy(&bytes));
-
-        while let Some(pos) = buf.find('\n') {
-            let line = buf[..pos].trim().to_string();
-            buf = buf[pos + 1..].to_string();
-            let data = match line.strip_prefix("data: ") {
-                Some(d) if d != "[DONE]" => d.to_string(),
-                _ => continue,
-            };
-            let Ok(event) = serde_json::from_str::<serde_json::Value>(&data) else { continue };
-            if let Some(text) = extract(&event) {
-                if !text.is_empty() {
-                    let to_emit = interceptor.process(&text);
-                    if !to_emit.is_empty() {
-                        visible.push_str(&to_emit);
-                        let _ = app.emit("claude:delta", to_emit);
-                    }
-                }
-            }
-        }
-    }
-
-    emit_tail(app, interceptor, &mut visible);
-    Ok(visible)
-}
-
-fn emit_tail(app: &AppHandle, interceptor: &mut TagInterceptor, visible: &mut String) {
+    // Flush any buffered non-tag text
     let tail = interceptor.flush();
     if !tail.is_empty() {
         visible.push_str(&tail);
         let _ = app.emit("claude:delta", tail);
     }
+
+    // Wrap tag-based actions as NativeCalls with synthetic IDs
+    let calls: Vec<NativeCall> = interceptor.take_actions().into_iter().enumerate()
+        .map(|(i, action)| NativeCall { id: format!("local_{}", i), action })
+        .collect();
+
+    Ok((visible, calls))
 }

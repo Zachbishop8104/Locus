@@ -98,3 +98,4 @@ pub fn set_local_model_name(app: AppHandle, name: String) -> Result<(), String> 
     config["local_model_name"] = serde_json::Value::String(name);
     write_config(&app, config)
 }
+

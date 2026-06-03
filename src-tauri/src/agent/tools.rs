@@ -7,44 +7,189 @@ use tauri::{AppHandle, Emitter};
 use serde_json::json;
 use tiberius::{Client as SqlClient, Config};
 use tokio::net::TcpStream;
+use tokio::sync::oneshot;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 use futures_util::future::FutureExt as _;
 
 use super::{PendingWriteEntry};
 use super::interceptor::ParsedAction;
 
+type WaiterMap = Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>;
+
 static WRITE_ID: AtomicU64 = AtomicU64::new(0);
 pub(crate) fn next_write_id() -> String {
     format!("locus_write_{}", WRITE_ID.fetch_add(1, Ordering::SeqCst))
 }
 
-// ─── Tool System Prompt ───────────────────────────────────────────────────────
+// ─── Tool Schemas & Prompts ───────────────────────────────────────────────────
+
+/// System prompt for API paths (Claude API, OpenAI-compat).
+/// Tool descriptions live in the tools array — no tag syntax needed here.
+pub(crate) fn api_system_prompt(user_system: Option<&str>) -> String {
+    let base = "\
+You are a developer assistant that WRITES CODE — you do not talk about it.
+
+## Non-negotiable rules
+
+1. NEVER put code or file content inside a chat message. Not in code blocks, not in prose.
+   If you are tempted to write ``` in a message — stop. Use the write tool instead.
+
+2. Use the write tool to propose every file. The UI shows the user a diff; they approve or reject.
+   This is how edits happen. Describing an edit in text does nothing.
+
+3. One file per turn. Call write once, then stop completely and wait.
+   Do not narrate what you wrote. Do not list what comes next.
+
+4. Before writing any file: list the project, then read relevant existing files.
+   Never overwrite without reading first.
+
+5. If the user asks for a plan, a roadmap, or suggestions — give a single sentence
+   acknowledging the goal, then immediately start writing the first file with the write tool.
+   Do not produce bullet lists of things you could do.
+
+## Correct flow
+
+User: \"add a login page\"
+→ call list_files (see what exists)
+→ call read_file on relevant files
+→ call write_file for the first new/changed file, then STOP
+→ (after approval) write the next file
+
+Never ask \"would you like me to proceed?\" — just proceed.";
+
+    match user_system {
+        Some(s) if !s.is_empty() => format!("{}\n\n{}", base, s),
+        _ => base.to_string(),
+    }
+}
+
+pub(crate) fn openai_tools_schema(has_files: bool, has_db: bool) -> Vec<serde_json::Value> {
+    let mut tools = vec![
+        json!({"type":"function","function":{"name":"locus_read","description":"Read a file's full contents","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Path relative to project root"}},"required":["path"]}}}),
+        json!({"type":"function","function":{"name":"locus_write","description":"Create or overwrite a file. Read it first if it already exists.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Path relative to project root"},"content":{"type":"string","description":"Complete new file content"}},"required":["path","content"]}}}),
+    ];
+    if has_files {
+        tools.push(json!({"type":"function","function":{"name":"locus_list","description":"List files in the project","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Subdirectory to list (omit for root)"}},"required":[]}}}));
+        tools.push(json!({"type":"function","function":{"name":"locus_search","description":"Search for text across all project files","parameters":{"type":"object","properties":{"pattern":{"type":"string","description":"Text to search for"}},"required":["pattern"]}}}));
+    }
+    if has_db {
+        tools.push(json!({"type":"function","function":{"name":"locus_query","description":"Run a read-only SQL SELECT query","parameters":{"type":"object","properties":{"query":{"type":"string","description":"SQL SELECT statement"}},"required":["query"]}}}));
+        tools.push(json!({"type":"function","function":{"name":"locus_schema","description":"Get the full database schema","parameters":{"type":"object","properties":{},"required":[]}}}));
+    }
+    tools
+}
+
+pub(crate) fn anthropic_tools_schema(has_files: bool, has_db: bool) -> Vec<serde_json::Value> {
+    let mut tools = vec![
+        json!({"name":"locus_read","description":"Read a file's full contents","input_schema":{"type":"object","properties":{"path":{"type":"string","description":"Path relative to project root"}},"required":["path"]}}),
+        json!({"name":"locus_write","description":"Create or overwrite a file. Read it first if it already exists.","input_schema":{"type":"object","properties":{"path":{"type":"string","description":"Path relative to project root"},"content":{"type":"string","description":"Complete new file content"}},"required":["path","content"]}}),
+    ];
+    if has_files {
+        tools.push(json!({"name":"locus_list","description":"List files in the project","input_schema":{"type":"object","properties":{"path":{"type":"string","description":"Subdirectory to list (omit for root)"}},"required":[]}}));
+        tools.push(json!({"name":"locus_search","description":"Search for text across all project files","input_schema":{"type":"object","properties":{"pattern":{"type":"string","description":"Text to search for"}},"required":["pattern"]}}));
+    }
+    if has_db {
+        tools.push(json!({"name":"locus_query","description":"Run a read-only SQL SELECT query","input_schema":{"type":"object","properties":{"query":{"type":"string","description":"SQL SELECT statement"}},"required":["query"]}}));
+        tools.push(json!({"name":"locus_schema","description":"Get the full database schema","input_schema":{"type":"object","properties":{},"required":[]}}));
+    }
+    tools
+}
+
+/// Map a native tool function name + JSON args back to a ParsedAction.
+pub(crate) fn native_tool_to_action(fn_name: &str, args: &serde_json::Value) -> Option<ParsedAction> {
+    match fn_name {
+        "locus_read"   => Some(ParsedAction { name: "read".into(),   content: args["path"].as_str()?.to_string() }),
+        "locus_list"   => Some(ParsedAction { name: "list".into(),   content: args["path"].as_str().unwrap_or("").to_string() }),
+        "locus_search" => Some(ParsedAction { name: "search".into(), content: args["pattern"].as_str()?.to_string() }),
+        "locus_write"  => {
+            let path    = args["path"].as_str()?;
+            let content = args["content"].as_str()?;
+            Some(ParsedAction { name: "write".into(), content: format!("{}\n{}", path, content) })
+        }
+        "locus_query"  => Some(ParsedAction { name: "query".into(),  content: args["query"].as_str()?.to_string() }),
+        "locus_schema" => Some(ParsedAction { name: "schema".into(), content: String::new() }),
+        _ => None,
+    }
+}
+
+/// Reconstruct the JSON input object for a ParsedAction (used when storing
+/// native tool calls back into the conversation history).
+pub(crate) fn action_to_input(action: &ParsedAction) -> serde_json::Value {
+    match action.name.as_str() {
+        "read"   => json!({"path": action.content.trim()}),
+        "list"   => json!({"path": action.content.trim()}),
+        "search" => json!({"pattern": action.content.trim()}),
+        "write"  => { let (p, c) = action.write_parts(); json!({"path": p, "content": c}) }
+        "query"  => json!({"query": action.content.trim()}),
+        "schema" => json!({}),
+        _        => json!({}),
+    }
+}
+
+// ─── Tag-based System Prompt (local Claude CLI only) ─────────────────────────
 
 pub(crate) fn tool_system_prompt(has_files: bool, has_db: bool) -> String {
     let mut s = String::from(
-        "You have access to tools. Use them by placing these XML tags in your response. \
-The application intercepts them, executes the action, and provides the result in the \
-next message before you continue.\n\n",
+"## FILE OPERATION RULES — read this first
+
+When creating or editing ANY file, you MUST use the locus:write tag. Do NOT use markdown code blocks.
+
+WRONG — never do this:
+```python
+# file content here
+```
+
+RIGHT — always do this:
+<locus:write>path/to/file.py
+# file content here
+</locus:write>
+
+This rule applies to every file: source code, markdown, JSON, config files, everything. \
+The application intercepts the tag, shows the user a diff, and asks them to accept or reject. \
+If you put file content in a code block instead, nothing gets created.\n\n\
+## Available tools\n\n",
     );
-    s.push_str("<locus:read>path/to/file</locus:read>\n  Reads a file and returns its content.\n\n");
+
     s.push_str(
-        "<locus:write>path/to/file\nCOMPLETE NEW FILE CONTENT HERE\n</locus:write>\n\
-  Proposes an edit shown as a diff for user approval.\n\
-  First line = file path. Everything after = complete new file content.\n\
-  Always read the file first so you can provide the full updated content.\n\n",
+        "<locus:write>path/to/file\nCOMPLETE FILE CONTENT\n</locus:write>\n\
+  Creates a new file or proposes an edit to an existing one.\n\
+  First line = file path. Everything after = full file content.\n\
+  For new files: use immediately. For edits: read the file first.\n\n",
     );
+    s.push_str("<locus:read>path/to/file</locus:read>\n  Reads a file and returns its content.\n  When the user asks you to look at, check, review, or read any file — use this immediately. Never ask the user to paste the content.\n\n");
+
     if has_files {
         s.push_str("<locus:list>optional/subdir</locus:list>\n  Lists files in the project.\n\n");
         s.push_str("<locus:search>pattern</locus:search>\n  Searches for text across all project files.\n\n");
     }
     if has_db {
         s.push_str("<locus:query>SELECT ...</locus:query>\n  Runs a read-only SQL query against the project database.\n\n");
+        s.push_str("<locus:schema></locus:schema>\n  Returns the full database schema (all tables and columns).\n\n");
     }
+
     s.push_str(
-        "Rules:\n\
-- Always read a file before writing it.\n\
-- Never paste full file content in chat when locus:write is available — use the tag.\n\
-- After each tool tag, stop and wait. The result arrives in the next message.\n",
+        "## Workflow rules\n\n\
+Before making any changes to a project:\n\
+1. Use locus:list to see what files exist\n\
+2. Use locus:read on relevant files (README, package.json, existing source) to understand the project\n\
+3. Only then propose changes with locus:write\n\n\
+Never assume what a file contains — always read it first.\n\
+Never overwrite a file without reading it first.\n\n\
+When writing files: propose ONE file per response, then stop. \
+Do not describe what comes next or list remaining files. \
+After the user approves, you will be called again for the next file.\n\n\
+After each tool tag, stop and wait. The result arrives in the next message.\n\n\
+## CRITICAL: No narration before tool tags\n\n\
+NEVER say what you are about to do before using a tool. Use the tag immediately.\n\n\
+WRONG:\n\
+Let me list the project files first.\n\
+<locus:list></locus:list>\n\n\
+WRONG:\n\
+I'll read the README to understand the project.\n\
+<locus:read>README.md</locus:read>\n\n\
+RIGHT — tool tag first, nothing before it:\n\
+<locus:list></locus:list>\n\n\
+Only speak AFTER you have results to share. When you need a tool, output the tag and nothing else.\n"
     );
     s
 }
@@ -57,6 +202,7 @@ pub(crate) async fn execute_action(
     db_conn: Option<&str>,
     app: &AppHandle,
     pending: Arc<Mutex<HashMap<String, PendingWriteEntry>>>,
+    waiter: WaiterMap,
 ) -> String {
     match action.name.as_str() {
         "read"   => read_file_tool(project_root, action.content.trim()),
@@ -64,10 +210,14 @@ pub(crate) async fn execute_action(
         "search" => search_code_tool(project_root, ".", action.content.trim()),
         "write"  => {
             let (path, content) = action.write_parts();
-            write_file_tool(app, pending, &next_write_id(), project_root, path, content)
+            write_file_tool(app, pending, waiter, &next_write_id(), project_root, path, content).await
         }
         "query" => match db_conn {
             Some(conn) => query_sqlserver(conn, action.content.trim()).await,
+            None => "Error: no database configured for this project".to_string(),
+        },
+        "schema" => match db_conn {
+            Some(conn) => get_schema_sqlserver(conn).await,
             None => "Error: no database configured for this project".to_string(),
         },
         other => format!("Unknown tool: {}", other),
@@ -150,9 +300,10 @@ pub(crate) fn read_file_tool(project_root: &str, path_str: &str) -> String {
     }
 }
 
-pub(crate) fn write_file_tool(
+pub(crate) async fn write_file_tool(
     app: &AppHandle,
     pending: Arc<Mutex<HashMap<String, PendingWriteEntry>>>,
+    waiter: WaiterMap,
     tool_use_id: &str,
     project_root: &str,
     file_path: &str,
@@ -170,13 +321,24 @@ pub(crate) fn write_file_tool(
         tool_use_id.to_string(),
         PendingWriteEntry { path, content: content.to_string() },
     );
+
+    // Register a oneshot channel so confirm_write can unblock this await.
+    let (tx, rx) = oneshot::channel::<bool>();
+    waiter.lock().unwrap().insert(tool_use_id.to_string(), tx);
+
     let _ = app.emit("claude:edit_request", json!({
         "toolUseId": tool_use_id,
         "filePath": file_path,
         "currentContent": current_content,
         "newContent": content
     }));
-    format!("Edit proposed for {}. Waiting for user approval.", file_path)
+
+    // Block until the user accepts or rejects.
+    match rx.await {
+        Ok(true)  => format!("{} was written successfully.", file_path),
+        Ok(false) => "__REJECTED__".to_string(),
+        Err(_)    => "__REJECTED__".to_string(), // channel dropped = stream cancelled
+    }
 }
 
 fn collect_files(dir: &Path, project_root: &Path, entries: &mut Vec<String>, depth: usize) {

@@ -47,6 +47,7 @@ export const useSettingsStore = defineStore('settings', () => {
     localModelName.value = name
   }
 
+
   return {
     apiKey, model, loaded, load, saveApiKey,
     useLocalClaude, setUseLocalClaude,

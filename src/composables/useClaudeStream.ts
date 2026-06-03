@@ -28,6 +28,7 @@ export function useClaudeStream() {
     onDelta: (text: string) => void,
     onDone: () => void,
     onError: (err: string) => void,
+    onNewTurn: () => void,
     system?: string,
     projectPath?: string,
     dbConnectionString?: string,
@@ -54,6 +55,10 @@ export function useClaudeStream() {
       await listen<EditRequest>('claude:edit_request', (e) => {
         toolActivity.value = null
         pendingEdit.set(e.payload)
+      }),
+
+      await listen<void>('claude:new_turn', () => {
+        onNewTurn()
       }),
 
       await listen<void>('claude:done', async () => {

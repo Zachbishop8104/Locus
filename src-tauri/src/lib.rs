@@ -6,6 +6,7 @@ mod teams;
 pub fn run() {
     tauri::Builder::default()
         .manage(agent::PendingWriteState::new())
+        .manage(agent::ApprovalWaiter::new())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(

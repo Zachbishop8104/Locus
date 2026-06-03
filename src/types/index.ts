@@ -4,6 +4,7 @@ export interface Message {
   content: string
   timestamp: string
   error?: boolean
+  cancelled?: boolean  // rejected write — shown in chat but excluded from API context
 }
 
 export interface Conversation {
