@@ -1,9 +1,0 @@
-# Tauri-generated ACL schema files - not meaningful app code
-src-tauri/gen/schemas/
-
-# Vite/Vue scaffolding assets (not Locus branding)
-src/assets/vite.svg
-src/assets/vue.svg
-
-# App icons - all variants of the same icon, low semantic value
-src-tauri/icons/
