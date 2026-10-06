@@ -106,3 +106,25 @@ export interface ClaudeCliStatus {
   authMethod: string | null
   error: string | null
 }
+
+export interface PullRequest {
+  id: string
+  number: number
+  title: string
+  url: string
+  repo: string
+  author: string
+  authorAvatar: string | null
+  isDraft: boolean
+  updatedAt: string
+  reviewDecision: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null
+  checks: 'SUCCESS' | 'FAILURE' | 'ERROR' | 'PENDING' | 'EXPECTED' | null
+  comments: number
+}
+
+export interface PullRequestLists {
+  login: string
+  reviewRequested: PullRequest[]
+  authored: PullRequest[]
+  involved: PullRequest[]
+}

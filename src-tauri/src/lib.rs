@@ -1,4 +1,5 @@
 mod agent;
+mod github;
 mod settings;
 mod teams;
 
@@ -38,6 +39,7 @@ pub fn run() {
             settings::set_local_model_url,
             settings::get_local_model_name,
             settings::set_local_model_name,
+            github::get_pull_requests,
             teams::start_teams_auth,
             teams::get_teams_status,
             teams::get_teams_credentials,

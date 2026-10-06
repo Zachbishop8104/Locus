@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import Sidebar from './Sidebar.vue'
+import PullRequestsPanel from './PullRequestsPanel.vue'
 import DiffPanel from '@/components/chat/DiffPanel.vue'
 </script>
 
@@ -10,5 +11,6 @@ import DiffPanel from '@/components/chat/DiffPanel.vue'
       <router-view />
       <DiffPanel />
     </main>
+    <PullRequestsPanel />
   </div>
 </template>
