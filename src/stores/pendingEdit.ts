@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { useSettingsStore } from '@/stores/settings'
 import { useChatStore } from '@/stores/chat'
 import type { EditRequest } from '@/types'
 
@@ -16,12 +15,11 @@ export const usePendingEditStore = defineStore('pendingEdit', () => {
   }
 
   function set(req: EditRequest) {
-    const settings = useSettingsStore()
-    if (settings.autoApproveEdits) {
-      invoke('confirm_write', { toolUseId: req.toolUseId, approved: true }).catch(() => {})
-      return
-    }
     request.value = req
+  }
+
+  function clear() {
+    request.value = null
   }
 
   async function resolve(approved: boolean) {
@@ -40,5 +38,5 @@ export const usePendingEditStore = defineStore('pendingEdit', () => {
     }
   }
 
-  return { request, set, resolve, registerCallbacks }
+  return { request, set, clear, resolve, registerCallbacks }
 })

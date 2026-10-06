@@ -7,6 +7,8 @@ pub fn run() {
     tauri::Builder::default()
         .manage(agent::PendingWriteState::new())
         .manage(agent::ApprovalWaiter::new())
+        .manage(agent::StreamGeneration::new())
+        .manage(agent::LiveMode::new())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -21,6 +23,9 @@ pub fn run() {
             agent::stream_message,
             agent::generate_title,
             agent::confirm_write,
+            agent::cancel_stream,
+            agent::set_mode,
+            agent::check_claude_cli,
             agent::pick_folder,
             agent::fetch_local_models,
             settings::get_api_key,

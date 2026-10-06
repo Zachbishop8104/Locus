@@ -27,19 +27,36 @@ const rows = computed<Row[]>(() => {
   const oldLines = normalize(pendingEdit.request.currentContent || '').split('\n')
   const newLines = normalize(pendingEdit.request.newContent).split('\n')
 
-  if (oldLines.length > 1000 || newLines.length > 1000)
-    return [{ left: { type: 'equal', text: '(file too large to diff inline)', lineNo: null }, right: { type: 'equal', text: '(file too large to diff inline)', lineNo: null } }]
+  // Unchanged lines at the top and bottom don't need the LCS, so targeted
+  // edits to large files stay cheap to diff.
+  let prefix = 0
+  while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) prefix++
+  let suffix = 0
+  while (
+    suffix < oldLines.length - prefix && suffix < newLines.length - prefix &&
+    oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]
+  ) suffix++
+  const oldMid = oldLines.slice(prefix, oldLines.length - suffix)
+  const newMid = newLines.slice(prefix, newLines.length - suffix)
 
-  const dp = lcs(oldLines, newLines)
+  if (oldMid.length > 1000 || newMid.length > 1000)
+    return [{ left: { type: 'equal', text: '(change too large to diff inline)', lineNo: null }, right: { type: 'equal', text: '(change too large to diff inline)', lineNo: null } }]
+
+  const dp = lcs(oldMid, newMid)
   type Flat = { type: 'remove' | 'add' | 'equal'; text: string }
-  const flat: Flat[] = []
-  let i = oldLines.length, j = newLines.length
+  const mid: Flat[] = []
+  let i = oldMid.length, j = newMid.length
   while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && oldLines[i-1] === newLines[j-1]) { flat.push({ type: 'equal', text: oldLines[i-1] }); i--; j-- }
-    else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) { flat.push({ type: 'add', text: newLines[j-1] }); j-- }
-    else { flat.push({ type: 'remove', text: oldLines[i-1] }); i-- }
+    if (i > 0 && j > 0 && oldMid[i-1] === newMid[j-1]) { mid.push({ type: 'equal', text: oldMid[i-1] }); i--; j-- }
+    else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) { mid.push({ type: 'add', text: newMid[j-1] }); j-- }
+    else { mid.push({ type: 'remove', text: oldMid[i-1] }); i-- }
   }
-  flat.reverse()
+  mid.reverse()
+  const flat: Flat[] = [
+    ...oldLines.slice(0, prefix).map((text) => ({ type: 'equal' as const, text })),
+    ...mid,
+    ...oldLines.slice(oldLines.length - suffix).map((text) => ({ type: 'equal' as const, text })),
+  ]
 
   let oln = 1, nln = 1
   const numbered = flat.map(l => ({ ...l, oln: l.type !== 'add' ? oln++ : null, nln: l.type !== 'remove' ? nln++ : null }))

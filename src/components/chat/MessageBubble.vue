@@ -76,7 +76,7 @@ function formatTime(date: string | Date) {
 
           <div
             v-if="message.content"
-            class="prose prose-sm prose-invert claude-prose max-w-none"
+            class="prose prose-sm prose-invert claude-prose max-w-none prose-code:before:content-none prose-code:after:content-none"
             :class="streaming && !toolActivity ? 'streaming-cursor' : ''"
             v-html="renderedContent"
           />

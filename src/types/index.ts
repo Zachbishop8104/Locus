@@ -53,18 +53,56 @@ export const PROJECT_COLORS = [
 ]
 
 export type ModelId =
-  | 'claude-opus-4-7'
-  | 'claude-sonnet-4-6'
-  | 'claude-haiku-4-5-20251001'
+  | 'claude-fable-5-1'
+  | 'claude-opus-5-5'
+  | 'claude-sonnet-5-5'
+  | 'claude-haiku-4-5'
 
 export interface ModelOption {
   id: ModelId
   label: string
   description: string
+  supportsEffort: boolean
 }
 
 export const MODELS: ModelOption[] = [
-  { id: 'claude-opus-4-7', label: 'Claude Opus 4.7', description: 'Most capable' },
-  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', description: 'Balanced' },
-  { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', description: 'Fastest' },
+  { id: 'claude-fable-5-1', label: 'Fable 5.1', description: 'Most capable, for the hardest work', supportsEffort: true },
+  { id: 'claude-opus-5-5', label: 'Opus 5.5', description: 'Deep reasoning for complex tasks', supportsEffort: true },
+  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', description: 'Fast and capable for everyday coding', supportsEffort: true },
+  { id: 'claude-haiku-4-5', label: 'Haiku 4.5', description: 'Fastest, for quick answers', supportsEffort: false },
 ]
+
+export const DEFAULT_MODEL: ModelId = 'claude-sonnet-5-5'
+
+export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+export const EFFORTS: { id: Effort; label: string }[] = [
+  { id: 'low', label: 'Low' },
+  { id: 'medium', label: 'Med' },
+  { id: 'high', label: 'High' },
+  { id: 'xhigh', label: 'X-High' },
+  { id: 'max', label: 'Max' },
+]
+
+/** Which family of models the picker has selected. */
+export type ProviderKind = 'claude' | 'local'
+
+/** What the backend routes on. */
+export type BackendProvider = 'claude_api' | 'claude_cli' | 'local'
+
+/** Permission modes, matching Claude Code. */
+export type PermissionMode = 'ask' | 'edits' | 'plan'
+
+export const MODES: { id: PermissionMode; label: string; description: string }[] = [
+  { id: 'ask', label: 'Ask permissions', description: 'Approve each file edit before it is written' },
+  { id: 'edits', label: 'Auto-accept edits', description: 'Write file edits without asking' },
+  { id: 'plan', label: 'Plan mode', description: 'Explore and propose a plan — no edits until you approve' },
+]
+
+export interface ClaudeCliStatus {
+  installed: boolean
+  version: string | null
+  loggedIn: boolean
+  authMethod: string | null
+  error: string | null
+}

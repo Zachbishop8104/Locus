@@ -4,20 +4,12 @@ Modules follow the Rust 2018 style: a module named `foo` is declared in `foo.rs`
 
 ## AI Agent Architecture
 
-The AI layer (`src-tauri/src/agent.rs`) is model-agnostic. All providers — Claude API, local Claude CLI, and any OpenAI-compatible model (Ollama, LM Studio, etc.) — run through the same agentic loop.
+The AI layer (`src-tauri/src/agent.rs`) is model-agnostic. All providers — Claude API, local Claude CLI, and any OpenAI-compatible model (Ollama, LM Studio, etc.) — run through the same agentic loop. The frontend picks the provider per message (`claude_api` | `claude_cli` | `local`) along with the model, effort, and permission mode (`ask` | `edits` | `plan`).
 
-**Adding a new capability is one thing:** add an instruction to `tool_system_prompt()` and a case in `execute_action()`. No Anthropic schema, no OpenAI schema, no frontend changes.
+**Two ways the model calls tools:**
+- **Claude API and local models** use native tool calling. Schemas live in `anthropic_tools_schema()` (the OpenAI schema is derived from it) and map back to actions in `native_tool_to_action()`.
+- **Claude CLI** uses tags: the model writes `<locus:name>content</locus:name>` in its response, and `TagInterceptor` parses these out of the stream in real time, hides them from the user, and the loop executes them and injects the result before the next turn. Instructions live in `tool_system_prompt()`.
 
-**How it works:** The model expresses intent by writing `<locus:name>content</locus:name>` tags in its response text. The `TagInterceptor` parses these out of the stream in real time, hides them from the user, executes the action, and injects the result as a user message before the next turn.
+**Adding a new capability:** add a case in `execute_action()`, a schema in `anthropic_tools_schema()` plus a mapping in `native_tool_to_action()`, and a tag instruction in `tool_system_prompt()`. No frontend changes are needed unless it needs new UI.
 
-**Models that can follow instructions work.** Claude, Qwen3, Llama3, Mistral — anything that can be told "write `<locus:read>path</locus:read>` when you want to read a file" will work. The fallback when a model ignores the tags is graceful — `actions.is_empty()` returns true and the loop ends cleanly.
-
-## graphify
-
-This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
-
-Rules:
-- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
-- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
-- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
-- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+**Models that can follow instructions work.** Claude, Qwen3, Llama3, Mistral. The fallback when a model ignores the tools is graceful — no actions means the loop ends cleanly.

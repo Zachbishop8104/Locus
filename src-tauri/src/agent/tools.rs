@@ -11,8 +11,8 @@ use tokio::sync::oneshot;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 use futures_util::future::FutureExt as _;
 
-use super::{PendingWriteEntry};
-use super::interceptor::ParsedAction;
+use super::{Mode, PendingWriteEntry};
+use super::interceptor::{EditSpec, ParsedAction};
 
 type WaiterMap = Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>;
 
@@ -23,67 +23,60 @@ pub(crate) fn next_write_id() -> String {
 
 // ─── Tool Schemas & Prompts ───────────────────────────────────────────────────
 
+const PLAN_MODE_RULES: &str = "\
+## Plan mode is ON
+
+You cannot change files right now. Investigate first: list, read, and search whatever you \
+need to understand the code. Then reply with a concise implementation plan: the files you \
+would change and what each change does. Do not write full file contents. End by asking the \
+user to approve the plan. Once they approve, the editing tools become available.";
+
 /// System prompt for API paths (Claude API, OpenAI-compat).
 /// Tool descriptions live in the tools array — no tag syntax needed here.
-pub(crate) fn api_system_prompt(user_system: Option<&str>) -> String {
-    let base = "\
-You are a developer assistant that WRITES CODE — you do not talk about it.
+pub(crate) fn api_system_prompt(user_system: Option<&str>, mode: Mode) -> String {
+    let mut s = String::from("\
+You are Locus, a coding assistant working inside the user's project. You have tools to list, \
+read, and search project files, and (outside plan mode) to edit and write files.
 
-## Non-negotiable rules
-
-1. NEVER put code or file content inside a chat message. Not in code blocks, not in prose.
-   If you are tempted to write ``` in a message — stop. Use the write tool instead.
-
-2. Use the write tool to propose every file. The UI shows the user a diff; they approve or reject.
-   This is how edits happen. Describing an edit in text does nothing.
-
-3. One file per turn. Call write once, then stop completely and wait.
-   Do not narrate what you wrote. Do not list what comes next.
-
-4. Before writing any file: list the project, then read relevant existing files.
-   Never overwrite without reading first.
-
-5. If the user asks for a plan, a roadmap, or suggestions — give a single sentence
-   acknowledging the goal, then immediately start writing the first file with the write tool.
-   Do not produce bullet lists of things you could do.
-
-## Correct flow
-
-User: \"add a login page\"
-→ call list_files (see what exists)
-→ call read_file on relevant files
-→ call write_file for the first new/changed file, then STOP
-→ (after approval) write the next file
-
-Never ask \"would you like me to proceed?\" — just proceed.";
-
-    match user_system {
-        Some(s) if !s.is_empty() => format!("{}\n\n{}", base, s),
-        _ => base.to_string(),
+- Answer questions directly. Short code snippets in chat are fine when explaining something.
+- To change part of an existing file, call locus_edit with an exact old_string and its \
+replacement. To create a file or rewrite most of one, call locus_write with the complete \
+content. The user sees a diff and approves or rejects it — describing a change in prose does \
+not apply it.
+- Read a file before changing it. Never guess at contents.
+- Make one file change per response. After the result comes back, continue with the next \
+change until the task is done, then summarize what changed in a sentence or two.
+- If a change is rejected, stop and wait for the user's direction.");
+    if !mode.allows_write() {
+        s.push_str("\n\n");
+        s.push_str(PLAN_MODE_RULES);
     }
+    if let Some(u) = user_system.filter(|u| !u.is_empty()) {
+        s.push_str("\n\n");
+        s.push_str(u);
+    }
+    s
 }
 
-pub(crate) fn openai_tools_schema(has_files: bool, has_db: bool) -> Vec<serde_json::Value> {
-    let mut tools = vec![
-        json!({"type":"function","function":{"name":"locus_read","description":"Read a file's full contents","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Path relative to project root"}},"required":["path"]}}}),
-        json!({"type":"function","function":{"name":"locus_write","description":"Create or overwrite a file. Read it first if it already exists.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Path relative to project root"},"content":{"type":"string","description":"Complete new file content"}},"required":["path","content"]}}}),
-    ];
-    if has_files {
-        tools.push(json!({"type":"function","function":{"name":"locus_list","description":"List files in the project","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Subdirectory to list (omit for root)"}},"required":[]}}}));
-        tools.push(json!({"type":"function","function":{"name":"locus_search","description":"Search for text across all project files","parameters":{"type":"object","properties":{"pattern":{"type":"string","description":"Text to search for"}},"required":["pattern"]}}}));
-    }
-    if has_db {
-        tools.push(json!({"type":"function","function":{"name":"locus_query","description":"Run a read-only SQL SELECT query","parameters":{"type":"object","properties":{"query":{"type":"string","description":"SQL SELECT statement"}},"required":["query"]}}}));
-        tools.push(json!({"type":"function","function":{"name":"locus_schema","description":"Get the full database schema","parameters":{"type":"object","properties":{},"required":[]}}}));
-    }
-    tools
+pub(crate) fn openai_tools_schema(has_files: bool, has_db: bool, allow_write: bool) -> Vec<serde_json::Value> {
+    anthropic_tools_schema(has_files, has_db, allow_write).into_iter().map(|t| json!({
+        "type": "function",
+        "function": {
+            "name": t["name"],
+            "description": t["description"],
+            "parameters": t["input_schema"],
+        }
+    })).collect()
 }
 
-pub(crate) fn anthropic_tools_schema(has_files: bool, has_db: bool) -> Vec<serde_json::Value> {
+pub(crate) fn anthropic_tools_schema(has_files: bool, has_db: bool, allow_write: bool) -> Vec<serde_json::Value> {
     let mut tools = vec![
         json!({"name":"locus_read","description":"Read a file's full contents","input_schema":{"type":"object","properties":{"path":{"type":"string","description":"Path relative to project root"}},"required":["path"]}}),
-        json!({"name":"locus_write","description":"Create or overwrite a file. Read it first if it already exists.","input_schema":{"type":"object","properties":{"path":{"type":"string","description":"Path relative to project root"},"content":{"type":"string","description":"Complete new file content"}},"required":["path","content"]}}),
     ];
+    if allow_write {
+        tools.push(json!({"name":"locus_edit","description":"Replace an exact string in an existing file. Prefer this over locus_write for changes to existing files. old_string must match the file exactly, including whitespace and indentation, without the line-number prefixes that locus_read adds. It must appear exactly once unless replace_all is true; include enough surrounding lines to make it unique.","input_schema":{"type":"object","properties":{"path":{"type":"string","description":"Path relative to project root"},"old_string":{"type":"string","description":"Exact text to replace"},"new_string":{"type":"string","description":"Replacement text"},"replace_all":{"type":"boolean","description":"Replace every occurrence (default false)"}},"required":["path","old_string","new_string"]}}));
+        tools.push(json!({"name":"locus_write","description":"Create a new file, or overwrite one when most of it changes. Read it first if it already exists.","input_schema":{"type":"object","properties":{"path":{"type":"string","description":"Path relative to project root"},"content":{"type":"string","description":"Complete new file content"}},"required":["path","content"]}}));
+    }
     if has_files {
         tools.push(json!({"name":"locus_list","description":"List files in the project","input_schema":{"type":"object","properties":{"path":{"type":"string","description":"Subdirectory to list (omit for root)"}},"required":[]}}));
         tools.push(json!({"name":"locus_search","description":"Search for text across all project files","input_schema":{"type":"object","properties":{"pattern":{"type":"string","description":"Text to search for"}},"required":["pattern"]}}));
@@ -96,20 +89,29 @@ pub(crate) fn anthropic_tools_schema(has_files: bool, has_db: bool) -> Vec<serde
 }
 
 /// Map a native tool function name + JSON args back to a ParsedAction.
-pub(crate) fn native_tool_to_action(fn_name: &str, args: &serde_json::Value) -> Option<ParsedAction> {
-    match fn_name {
-        "locus_read"   => Some(ParsedAction { name: "read".into(),   content: args["path"].as_str()?.to_string() }),
-        "locus_list"   => Some(ParsedAction { name: "list".into(),   content: args["path"].as_str().unwrap_or("").to_string() }),
-        "locus_search" => Some(ParsedAction { name: "search".into(), content: args["pattern"].as_str()?.to_string() }),
-        "locus_write"  => {
-            let path    = args["path"].as_str()?;
-            let content = args["content"].as_str()?;
-            Some(ParsedAction { name: "write".into(), content: format!("{}\n{}", path, content) })
-        }
-        "locus_query"  => Some(ParsedAction { name: "query".into(),  content: args["query"].as_str()?.to_string() }),
-        "locus_schema" => Some(ParsedAction { name: "schema".into(), content: String::new() }),
+/// Malformed calls become an "invalid" action so the model still gets a
+/// tool result for every tool call it made.
+pub(crate) fn native_tool_to_action(fn_name: &str, args: &serde_json::Value) -> ParsedAction {
+    let parsed = match fn_name {
+        "locus_read"   => args["path"].as_str().map(|p| ParsedAction::new("read", p)),
+        "locus_list"   => Some(ParsedAction::new("list", args["path"].as_str().unwrap_or(""))),
+        "locus_search" => args["pattern"].as_str().map(|p| ParsedAction::new("search", p)),
+        "locus_write"  => match (args["path"].as_str(), args["content"].as_str()) {
+            (Some(p), Some(c)) => Some(ParsedAction::new("write", format!("{}\n{}", p, c))),
+            _ => None,
+        },
+        "locus_edit"   => match (args["path"].as_str(), args["old_string"].as_str(), args["new_string"].as_str()) {
+            (Some(p), Some(_), Some(_)) => Some(ParsedAction { args: args.clone(), ..ParsedAction::new("edit", p) }),
+            _ => None,
+        },
+        "locus_query"  => args["query"].as_str().map(|q| ParsedAction::new("query", q)),
+        "locus_schema" => Some(ParsedAction::new("schema", "")),
         _ => None,
-    }
+    };
+    parsed.unwrap_or_else(|| ParsedAction::new(
+        "invalid",
+        format!("Error: {} was called with missing or malformed arguments. Retry with valid arguments.", fn_name),
+    ))
 }
 
 /// Reconstruct the JSON input object for a ParsedAction (used when storing
@@ -120,77 +122,74 @@ pub(crate) fn action_to_input(action: &ParsedAction) -> serde_json::Value {
         "list"   => json!({"path": action.content.trim()}),
         "search" => json!({"pattern": action.content.trim()}),
         "write"  => { let (p, c) = action.write_parts(); json!({"path": p, "content": c}) }
+        "edit"   => match action.edit_parts() {
+            Ok(spec) if spec.hunks.len() == 1 => json!({
+                "path": spec.path, "old_string": spec.hunks[0].old,
+                "new_string": spec.hunks[0].new, "replace_all": spec.replace_all,
+            }),
+            _ => json!({"path": action.write_parts().0}),
+        },
         "query"  => json!({"query": action.content.trim()}),
-        "schema" => json!({}),
         _        => json!({}),
     }
 }
 
 // ─── Tag-based System Prompt (local Claude CLI only) ─────────────────────────
 
-pub(crate) fn tool_system_prompt(has_files: bool, has_db: bool) -> String {
+pub(crate) fn tool_system_prompt(has_files: bool, has_db: bool, mode: Mode) -> String {
     let mut s = String::from(
-"## FILE OPERATION RULES — read this first
+"You are Locus, a coding assistant working inside the user's project. You act on the project \
+by writing locus tags in your reply. The app intercepts each tag, runs it, and sends you the \
+result in the next message.
 
-When creating or editing ANY file, you MUST use the locus:write tag. Do NOT use markdown code blocks.
+## Tools\n\n");
 
-WRONG — never do this:
-```python
-# file content here
-```
-
-RIGHT — always do this:
-<locus:write>path/to/file.py
-# file content here
-</locus:write>
-
-This rule applies to every file: source code, markdown, JSON, config files, everything. \
-The application intercepts the tag, shows the user a diff, and asks them to accept or reject. \
-If you put file content in a code block instead, nothing gets created.\n\n\
-## Available tools\n\n",
-    );
-
-    s.push_str(
-        "<locus:write>path/to/file\nCOMPLETE FILE CONTENT\n</locus:write>\n\
-  Creates a new file or proposes an edit to an existing one.\n\
-  First line = file path. Everything after = full file content.\n\
-  For new files: use immediately. For edits: read the file first.\n\n",
-    );
-    s.push_str("<locus:read>path/to/file</locus:read>\n  Reads a file and returns its content.\n  When the user asks you to look at, check, review, or read any file — use this immediately. Never ask the user to paste the content.\n\n");
-
+    s.push_str("<locus:read>path/to/file</locus:read>\n  Returns the file's contents. Use it whenever you need to see a file — never ask the user to paste it.\n\n");
     if has_files {
         s.push_str("<locus:list>optional/subdir</locus:list>\n  Lists files in the project.\n\n");
         s.push_str("<locus:search>pattern</locus:search>\n  Searches for text across all project files.\n\n");
     }
     if has_db {
         s.push_str("<locus:query>SELECT ...</locus:query>\n  Runs a read-only SQL query against the project database.\n\n");
-        s.push_str("<locus:schema></locus:schema>\n  Returns the full database schema (all tables and columns).\n\n");
+        s.push_str("<locus:schema></locus:schema>\n  Returns the full database schema.\n\n");
+    }
+    if mode.allows_write() {
+        s.push_str(
+"<locus:write>path/to/file
+COMPLETE FILE CONTENT
+</locus:write>
+  Creates or overwrites a file. First line is the path; everything after is the full new \
+content. The user sees a diff and approves or rejects it. Putting file content in a markdown \
+code block does NOT change the file — only this tag does.\n\n");
+        s.push_str(
+"<locus:edit>path/to/file
+<<<<<<< SEARCH
+exact existing lines
+=======
+replacement lines
+>>>>>>> REPLACE
+</locus:edit>
+  Changes part of an existing file. Prefer this over locus:write for existing files. SEARCH \
+must match the file exactly, including indentation, without the line-number prefixes that \
+locus:read adds, and must appear only once — include enough surrounding lines to make it \
+unique. One tag may contain several SEARCH/REPLACE blocks for the same file.\n\n");
     }
 
     s.push_str(
-        "## Workflow rules\n\n\
-Before making any changes to a project:\n\
-1. Use locus:list to see what files exist\n\
-2. Use locus:read on relevant files (README, package.json, existing source) to understand the project\n\
-3. Only then propose changes with locus:write\n\n\
-Never assume what a file contains — always read it first.\n\
-Never overwrite a file without reading it first.\n\n\
-When writing files: propose ONE file per response, then stop. \
-Do not describe what comes next or list remaining files. \
-After the user approves, you will be called again for the next file.\n\n\
-After each tool tag, stop and wait. The result arrives in the next message.\n\n\
-## CRITICAL: No narration before tool tags\n\n\
-NEVER say what you are about to do before using a tool. Use the tag immediately.\n\n\
-WRONG:\n\
-Let me list the project files first.\n\
-<locus:list></locus:list>\n\n\
-WRONG:\n\
-I'll read the README to understand the project.\n\
-<locus:read>README.md</locus:read>\n\n\
-RIGHT — tool tag first, nothing before it:\n\
-<locus:list></locus:list>\n\n\
-Only speak AFTER you have results to share. When you need a tool, output the tag and nothing else.\n"
-    );
+"## Rules
+
+- Answer questions directly. Short code snippets in chat are fine when explaining something.
+- Read a file before changing it.
+- After a tool tag, stop writing — the result arrives in the next message.
+- Use at most one locus:edit or locus:write per reply. Continue with the next change after the \
+result comes back, and summarize the changes in a sentence or two when done.
+- If a change is rejected, stop and wait for the user's direction.\n");
+
+    if !mode.allows_write() {
+        s.push('\n');
+        s.push_str(PLAN_MODE_RULES);
+        s.push('\n');
+    }
     s
 }
 
@@ -203,15 +202,32 @@ pub(crate) async fn execute_action(
     app: &AppHandle,
     pending: Arc<Mutex<HashMap<String, PendingWriteEntry>>>,
     waiter: WaiterMap,
+    mode: Mode,
 ) -> String {
     match action.name.as_str() {
         "read"   => read_file_tool(project_root, action.content.trim()),
         "list"   => list_files_tool(project_root, action.content.trim()),
         "search" => search_code_tool(project_root, ".", action.content.trim()),
+        "write" | "edit" if !mode.allows_write() => {
+            "Error: plan mode is on, so files cannot be changed. Present your plan and ask the user to approve it.".to_string()
+        }
         "write"  => {
             let (path, content) = action.write_parts();
-            write_file_tool(app, pending, waiter, &next_write_id(), project_root, path, content).await
+            if mode == Mode::AcceptEdits {
+                write_file_direct(app, project_root, path, content)
+            } else {
+                write_file_tool(app, pending, waiter, &next_write_id(), project_root, path, content).await
+            }
         }
+        "edit"   => {
+            let edited = action.edit_parts().and_then(|spec| apply_edit(project_root, &spec).map(|c| (spec.path, c)));
+            match edited {
+                Err(e) => e,
+                Ok((path, content)) if mode == Mode::AcceptEdits => write_file_direct(app, project_root, &path, &content),
+                Ok((path, content)) => write_file_tool(app, pending, waiter, &next_write_id(), project_root, &path, &content).await,
+            }
+        }
+        "invalid" => action.content.clone(),
         "query" => match db_conn {
             Some(conn) => query_sqlserver(conn, action.content.trim()).await,
             None => "Error: no database configured for this project".to_string(),
@@ -300,6 +316,70 @@ pub(crate) fn read_file_tool(project_root: &str, path_str: &str) -> String {
     }
 }
 
+fn resolve_write_path(project_root: &str, file_path: &str) -> Result<PathBuf, String> {
+    if file_path.is_empty() { return Err("Error: path is required".to_string()); }
+    if file_path.contains("..") { return Err("Error: path traversal not allowed".to_string()); }
+    if project_root.is_empty() { return Ok(PathBuf::from(file_path)); }
+    safe_path_for_write(project_root, file_path).map_err(|e| format!("Error: {}", e))
+}
+
+/// Apply exact-match replacements to a file and return the new content.
+/// Nothing is written here; the result goes through the normal approval flow.
+fn apply_edit(project_root: &str, spec: &EditSpec) -> Result<String, String> {
+    let path = if project_root.is_empty() {
+        let p = PathBuf::from(&spec.path);
+        if !p.is_absolute() { return Err("Error: no project is configured — provide an absolute file path".to_string()); }
+        p
+    } else {
+        safe_path(project_root, &spec.path).map_err(|e| format!("Error: {}", e))?
+    };
+    let mut content = fs::read_to_string(&path)
+        .map_err(|e| format!("Error reading {}: {}. To create a new file, use the write tool.", spec.path, e))?;
+    let crlf = content.contains("\r\n");
+
+    for (i, hunk) in spec.hunks.iter().enumerate() {
+        let which = if spec.hunks.len() > 1 { format!(" (block {})", i + 1) } else { String::new() };
+        if hunk.old.is_empty() {
+            return Err(format!("Error{}: old_string is empty. Use the write tool to create files.", which));
+        }
+        if hunk.old == hunk.new {
+            return Err(format!("Error{}: old_string and new_string are identical.", which));
+        }
+        // Models write \n; match Windows line endings when the file uses them.
+        let (old, new) = if crlf && !content.contains(&hunk.old) && !hunk.old.contains('\r') {
+            (hunk.old.replace('\n', "\r\n"), hunk.new.replace('\n', "\r\n"))
+        } else {
+            (hunk.old.clone(), hunk.new.clone())
+        };
+        match content.matches(&old).count() {
+            0 => return Err(format!(
+                "Error{}: old_string was not found in {}. Read the file again and copy the text exactly, \
+                 including indentation and without line-number prefixes.", which, spec.path)),
+            1 => content = content.replacen(&old, &new, 1),
+            _ if spec.replace_all => content = content.replace(&old, &new),
+            n => return Err(format!(
+                "Error{}: old_string matches {} places in {}. Include more surrounding lines so it is unique, \
+                 or set replace_all to change every occurrence.", which, n, spec.path)),
+        }
+    }
+    Ok(content)
+}
+
+/// Auto-accept mode: write immediately and tell the UI what changed.
+fn write_file_direct(app: &AppHandle, project_root: &str, file_path: &str, content: &str) -> String {
+    let path = match resolve_write_path(project_root, file_path) { Ok(p) => p, Err(e) => return e };
+    if let Some(parent) = path.parent() {
+        if let Err(e) = fs::create_dir_all(parent) { return format!("Error: {}", e); }
+    }
+    match fs::write(&path, content) {
+        Ok(()) => {
+            let _ = app.emit("claude:file_written", json!({ "filePath": file_path }));
+            format!("{} was written successfully.", file_path)
+        }
+        Err(e) => format!("Error writing {}: {}", file_path, e),
+    }
+}
+
 pub(crate) async fn write_file_tool(
     app: &AppHandle,
     pending: Arc<Mutex<HashMap<String, PendingWriteEntry>>>,
@@ -309,13 +389,7 @@ pub(crate) async fn write_file_tool(
     file_path: &str,
     content: &str,
 ) -> String {
-    if file_path.is_empty() { return "Error: path is required".to_string(); }
-    if file_path.contains("..") { return "Error: path traversal not allowed".to_string(); }
-    let path = if project_root.is_empty() {
-        PathBuf::from(file_path)
-    } else {
-        match safe_path_for_write(project_root, file_path) { Ok(p) => p, Err(e) => return format!("Error: {}", e) }
-    };
+    let path = match resolve_write_path(project_root, file_path) { Ok(p) => p, Err(e) => return e };
     let current_content = fs::read_to_string(&path).unwrap_or_default();
     pending.lock().unwrap().insert(
         tool_use_id.to_string(),
@@ -544,4 +618,89 @@ pub(crate) async fn get_schema_sqlserver(connection_string: &str) -> String {
             ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME \
         WHERE t.TABLE_TYPE = 'BASE TABLE' \
         ORDER BY t.TABLE_SCHEMA, t.TABLE_NAME, c.ORDINAL_POSITION").await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::interceptor::TagInterceptor;
+
+    fn project_with(name: &str, content: &str) -> (PathBuf, String) {
+        let dir = std::env::temp_dir().join(format!("locus_edit_test_{}_{}", name, std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("f.txt"), content).unwrap();
+        let root = dir.to_string_lossy().to_string();
+        (dir, root)
+    }
+
+    fn native_edit(old: &str, new: &str, replace_all: bool) -> ParsedAction {
+        native_tool_to_action("locus_edit", &json!({
+            "path": "f.txt", "old_string": old, "new_string": new, "replace_all": replace_all,
+        }))
+    }
+
+    #[test]
+    fn native_edit_replaces_unique_match() {
+        let (dir, root) = project_with("unique", "fn a() {}\nfn b() {}\n");
+        let spec = native_edit("fn b() {}", "fn b() { 1 }", false).edit_parts().unwrap();
+        assert_eq!(apply_edit(&root, &spec).unwrap(), "fn a() {}\nfn b() { 1 }\n");
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn ambiguous_match_errors_unless_replace_all() {
+        let (dir, root) = project_with("ambiguous", "x = 1\nx = 1\n");
+        let spec = native_edit("x = 1", "x = 2", false).edit_parts().unwrap();
+        assert!(apply_edit(&root, &spec).unwrap_err().contains("matches 2 places"));
+        let spec = native_edit("x = 1", "x = 2", true).edit_parts().unwrap();
+        assert_eq!(apply_edit(&root, &spec).unwrap(), "x = 2\nx = 2\n");
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn missing_text_errors() {
+        let (dir, root) = project_with("missing", "hello\n");
+        let spec = native_edit("goodbye", "hi", false).edit_parts().unwrap();
+        assert!(apply_edit(&root, &spec).unwrap_err().contains("was not found"));
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn crlf_files_match_lf_edits() {
+        let (dir, root) = project_with("crlf", "line one\r\nline two\r\nline three\r\n");
+        let spec = native_edit("line one\nline two", "line 1\nline 2", false).edit_parts().unwrap();
+        assert_eq!(apply_edit(&root, &spec).unwrap(), "line 1\r\nline 2\r\nline three\r\n");
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn tag_edit_with_multiple_blocks() {
+        let (dir, root) = project_with("tag", "const a = 1;\n  const b = 2;\nconst c = 3;\n");
+        let mut i = TagInterceptor::new();
+        let shown = i.process(
+            "Updating.<locus:edit>f.txt\n<<<<<<< SEARCH\nconst a = 1;\n=======\nconst a = 10;\n>>>>>>> REPLACE\n\
+             <<<<<<< SEARCH\n  const b = 2;\n=======\n  const b = 20;\n>>>>>>> REPLACE\n</locus:edit>",
+        );
+        assert_eq!(shown, "Updating.");
+        let action = i.take_actions().pop().unwrap();
+        assert_eq!(action.name, "edit");
+        let spec = action.edit_parts().unwrap();
+        assert_eq!(spec.path, "f.txt");
+        assert_eq!(spec.hunks.len(), 2);
+        assert_eq!(apply_edit(&root, &spec).unwrap(), "const a = 10;\n  const b = 20;\nconst c = 3;\n");
+        assert_eq!(action_to_input(&action), json!({"path": "f.txt"}));
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn malformed_tag_edit_errors() {
+        let action = ParsedAction::new("edit", "f.txt\njust some text");
+        assert!(action.edit_parts().is_err());
+    }
+
+    #[test]
+    fn malformed_native_edit_becomes_invalid() {
+        let action = native_tool_to_action("locus_edit", &json!({"path": "f.txt"}));
+        assert_eq!(action.name, "invalid");
+    }
 }

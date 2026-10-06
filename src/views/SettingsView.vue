@@ -1,8 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { Eye, EyeOff, Check, Key, Users, Loader2, LogOut, AlertCircle, ExternalLink, Cpu, Server, RefreshCw } from '@lucide/vue'
+import { invoke } from '@tauri-apps/api/core'
+import {
+  Eye, EyeOff, Check, Key, Users, Loader2, LogOut, AlertCircle, ExternalLink, Server, RefreshCw,
+  Terminal, CheckCircle2,
+} from '@lucide/vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useTeamsStore } from '@/stores/teams'
+import type { ClaudeCliStatus } from '@/types'
 
 const settings = useSettingsStore()
 const teams = useTeamsStore()
@@ -11,12 +16,26 @@ const inputKey = ref(settings.apiKey)
 const showKey = ref(false)
 const saved = ref(false)
 
+const cliStatus = ref<ClaudeCliStatus | null>(null)
+const checkingCli = ref(false)
+
 const localModelUrl = ref(settings.localModelUrl)
 const localModelName = ref(settings.localModelName)
 const savedLocal = ref(false)
-const availableModels = ref<string[]>([])
-const fetchingModels = ref(false)
-const fetchModelsError = ref('')
+
+async function checkCli() {
+  checkingCli.value = true
+  try {
+    cliStatus.value = await invoke<ClaudeCliStatus>('check_claude_cli')
+  } finally {
+    checkingCli.value = false
+  }
+}
+
+async function chooseClaudeVia(cli: boolean) {
+  await settings.setUseLocalClaude(cli)
+  if (cli && !cliStatus.value) checkCli()
+}
 
 async function saveLocalModel() {
   await settings.saveLocalModelUrl(localModelUrl.value.trim())
@@ -26,19 +45,11 @@ async function saveLocalModel() {
 }
 
 async function fetchModels() {
-  fetchingModels.value = true
-  fetchModelsError.value = ''
-  try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    const models = await invoke<string[]>('fetch_local_models', { baseUrl: localModelUrl.value.trim() })
-    availableModels.value = models
-    if (models.length > 0 && !models.includes(localModelName.value)) {
-      localModelName.value = models[0]
-    }
-  } catch (e) {
-    fetchModelsError.value = String(e)
-  } finally {
-    fetchingModels.value = false
+  await settings.saveLocalModelUrl(localModelUrl.value.trim())
+  await settings.refreshLocalModels()
+  const models = settings.localModels
+  if (models.length > 0 && !models.includes(localModelName.value)) {
+    localModelName.value = models[0]
   }
 }
 
@@ -49,6 +60,7 @@ const teamsError = ref('')
 const showAzureGuide = ref(false)
 
 onMounted(async () => {
+  if (settings.useLocalClaude) checkCli()
   await teams.loadStatus()
   const [clientId, tenantId] = await teams.getCredentials()
   teamsClientId.value = clientId
@@ -91,40 +103,87 @@ async function disconnectTeams() {
     <div class="flex-1 overflow-y-auto px-6 py-6">
       <div class="max-w-lg flex flex-col gap-8">
 
-        <!-- ─── Claude Connection ─── -->
+        <!-- ─── Claude ─── -->
         <section class="flex flex-col gap-4">
           <div>
-            <h2 class="text-base font-semibold text-fg">Claude Connection</h2>
+            <h2 class="text-base font-semibold text-fg">Claude</h2>
             <p class="text-sm text-fg-subtle mt-1">
-              Choose how Locus connects to Claude.
+              Choose how Locus connects to Claude models.
             </p>
           </div>
 
-          <!-- Local subscription toggle -->
-          <div class="flex items-center justify-between p-4 rounded-xl border border-border-strong bg-surface/60">
-            <div class="flex items-center gap-3">
-              <Cpu :size="16" class="text-accent-icon shrink-0" />
-              <div>
-                <p class="text-sm font-medium text-fg">Use local Claude subscription</p>
-                <p class="text-xs text-fg-subtle mt-0.5">
-                  Use your Claude Code subscription instead of an API key.
-                </p>
-              </div>
-            </div>
+          <div class="grid grid-cols-2 gap-3">
             <button
-              class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer"
-              :class="settings.useLocalClaude ? 'bg-accent' : 'bg-border-strong'"
-              @click="settings.setUseLocalClaude(!settings.useLocalClaude)"
+              class="flex flex-col gap-1.5 p-4 rounded-xl border text-left transition-colors cursor-pointer"
+              :class="settings.useLocalClaude ? 'border-accent bg-accent/5 ring-1 ring-accent/30' : 'border-border-strong bg-surface/60 hover:border-accent/50'"
+              @click="chooseClaudeVia(true)"
             >
-              <span
-                class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
-                :class="settings.useLocalClaude ? 'translate-x-6' : 'translate-x-1'"
-              />
+              <div class="flex items-center gap-2">
+                <Terminal :size="15" class="text-accent-icon" />
+                <span class="text-sm font-medium text-fg">Claude Code</span>
+              </div>
+              <span class="text-xs text-fg-subtle">
+                Uses your Claude subscription through the Claude Code CLI on this machine.
+              </span>
+            </button>
+            <button
+              class="flex flex-col gap-1.5 p-4 rounded-xl border text-left transition-colors cursor-pointer"
+              :class="!settings.useLocalClaude ? 'border-accent bg-accent/5 ring-1 ring-accent/30' : 'border-border-strong bg-surface/60 hover:border-accent/50'"
+              @click="chooseClaudeVia(false)"
+            >
+              <div class="flex items-center gap-2">
+                <Key :size="15" class="text-accent-icon" />
+                <span class="text-sm font-medium text-fg">API key</span>
+              </div>
+              <span class="text-xs text-fg-subtle">
+                Pay-as-you-go through the Claude API. Uses native tool calling.
+              </span>
             </button>
           </div>
 
-          <!-- API Key (shown when not using local subscription) -->
-          <template v-if="!settings.useLocalClaude">
+          <!-- Claude Code status -->
+          <template v-if="settings.useLocalClaude">
+            <div class="flex items-start justify-between gap-3 p-4 rounded-xl border border-border-strong bg-surface/60">
+              <div class="flex items-start gap-2.5 text-sm">
+                <Loader2 v-if="checkingCli && !cliStatus" :size="15" class="mt-0.5 animate-spin text-fg-subtle shrink-0" />
+                <CheckCircle2 v-else-if="cliStatus?.loggedIn" :size="15" class="mt-0.5 text-emerald-600 shrink-0" />
+                <AlertCircle v-else :size="15" class="mt-0.5 text-amber-600 shrink-0" />
+                <div>
+                  <p v-if="checkingCli && !cliStatus" class="text-fg-muted">Checking Claude Code…</p>
+                  <template v-else-if="cliStatus?.loggedIn">
+                    <p class="text-fg font-medium">Signed in</p>
+                    <p class="text-xs text-fg-subtle mt-0.5">{{ cliStatus.version }}</p>
+                  </template>
+                  <template v-else-if="cliStatus?.installed">
+                    <p class="text-fg font-medium">Claude Code isn't signed in</p>
+                    <p class="text-xs text-fg-subtle mt-0.5">
+                      Open a terminal, run <code class="font-mono text-fg-muted">claude</code>, and use
+                      <code class="font-mono text-fg-muted">/login</code>. Then check again.
+                    </p>
+                  </template>
+                  <template v-else-if="cliStatus">
+                    <p class="text-fg font-medium">Claude Code not found</p>
+                    <p class="text-xs text-fg-subtle mt-0.5">{{ cliStatus.error }}</p>
+                  </template>
+                </div>
+              </div>
+              <button
+                class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-border-strong text-fg-muted hover:text-fg hover:border-accent/60 transition-colors cursor-pointer shrink-0"
+                :disabled="checkingCli"
+                @click="checkCli"
+              >
+                <RefreshCw :size="12" :class="checkingCli ? 'animate-spin' : ''" />
+                Check again
+              </button>
+            </div>
+            <p class="text-xs text-fg-faint -mt-1">
+              Locus runs Claude Code in headless mode, which counts as programmatic usage: it draws on your
+              plan's monthly programmatic credit rather than your interactive limits.
+            </p>
+          </template>
+
+          <!-- API Key -->
+          <template v-else>
             <div class="flex flex-col gap-2">
               <label class="flex items-center gap-1.5 text-xs font-medium text-fg-muted">
                 <Key :size="12" /> API Key
@@ -159,12 +218,13 @@ async function disconnectTeams() {
 
         <div class="border-t border-border" />
 
-        <!-- ─── Local Model ─── -->
+        <!-- ─── Local Models ─── -->
         <section class="flex flex-col gap-4">
           <div>
-            <h2 class="text-base font-semibold text-fg">Local Model</h2>
+            <h2 class="text-base font-semibold text-fg">Local Models</h2>
             <p class="text-sm text-fg-subtle mt-1">
-              Use a local model via any OpenAI-compatible endpoint (Ollama, LM Studio, etc.).
+              Use models from Ollama, LM Studio, or any OpenAI-compatible server alongside Claude.
+              Switch between them from the model menu in chat.
             </p>
           </div>
 
@@ -173,9 +233,9 @@ async function disconnectTeams() {
             <div class="flex items-center gap-3">
               <Server :size="16" class="text-accent-icon shrink-0" />
               <div>
-                <p class="text-sm font-medium text-fg">Use local model</p>
+                <p class="text-sm font-medium text-fg">Enable local models</p>
                 <p class="text-xs text-fg-subtle mt-0.5">
-                  Overrides Claude API and local Claude subscription.
+                  Adds your local server's models to the model menu.
                 </p>
               </div>
             </div>
@@ -193,7 +253,6 @@ async function disconnectTeams() {
 
           <!-- Config fields (shown when enabled) -->
           <template v-if="settings.useLocalModel">
-            <!-- Base URL + fetch button -->
             <div class="flex flex-col gap-2">
               <label class="text-xs font-medium text-fg-muted">Base URL</label>
               <div class="flex gap-2">
@@ -205,34 +264,33 @@ async function disconnectTeams() {
                 />
                 <button
                   class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border border-border-strong text-fg-muted hover:text-fg hover:border-accent/60 transition-colors cursor-pointer shrink-0"
-                  :disabled="fetchingModels"
+                  :disabled="settings.fetchingLocalModels"
                   @click="fetchModels"
                 >
-                  <RefreshCw :size="14" :class="fetchingModels ? 'animate-spin' : ''" />
-                  {{ fetchingModels ? 'Loading…' : 'Load models' }}
+                  <RefreshCw :size="14" :class="settings.fetchingLocalModels ? 'animate-spin' : ''" />
+                  {{ settings.fetchingLocalModels ? 'Loading…' : 'Load models' }}
                 </button>
               </div>
               <p class="text-xs text-fg-faint">Ollama: http://localhost:11434/v1 · LM Studio: http://localhost:1234/v1</p>
             </div>
 
-            <!-- Error from fetch -->
             <div
-              v-if="fetchModelsError"
+              v-if="settings.localModelsError"
               class="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-red-950/40 border border-red-700/50 text-red-400 text-xs"
             >
               <AlertCircle :size="13" class="shrink-0 mt-0.5" />
-              <span>{{ fetchModelsError }}</span>
+              <span>{{ settings.localModelsError }}</span>
             </div>
 
             <div class="flex flex-col gap-2">
-              <label class="text-xs font-medium text-fg-muted">Model</label>
+              <label class="text-xs font-medium text-fg-muted">Default model</label>
               <select
-                v-if="availableModels.length > 0"
+                v-if="settings.localModels.length > 0"
                 v-model="localModelName"
                 class="w-full bg-surface border border-border-strong rounded-lg px-3 py-2.5 text-sm text-fg outline-none focus:border-accent/70 transition-colors cursor-pointer font-mono"
               >
                 <option value="">— none —</option>
-                <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
+                <option v-for="m in settings.localModels" :key="m" :value="m">{{ m }}</option>
               </select>
               <input
                 v-else
@@ -242,7 +300,6 @@ async function disconnectTeams() {
                 placeholder="qwen3:14b"
               />
             </div>
-
 
             <button
               class="flex items-center gap-2 w-fit px-4 py-2 rounded-lg text-sm font-medium transition-all cursor-pointer"

@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { Send, Square } from '@lucide/vue'
-import { MODELS } from '@/types'
+import { MODES } from '@/types'
 import { useSettingsStore } from '@/stores/settings'
+import ModelPicker from './ModelPicker.vue'
+import ModePicker from './ModePicker.vue'
 
 defineProps<{ disabled?: boolean; streaming?: boolean }>()
 const emit = defineEmits<{
@@ -14,12 +16,9 @@ const settings = useSettingsStore()
 const text = ref('')
 const textarea = ref<HTMLTextAreaElement | null>(null)
 
-const permissionMode = computed({
-  get: () => (settings.autoApproveEdits ? 'auto' : 'ask'),
-  set: (val: string) => {
-    settings.autoApproveEdits = val === 'auto'
-  },
-})
+const placeholder = computed(() =>
+  settings.mode === 'plan' ? 'Describe what you want to build — Locus will plan first…' : 'Message Locus…',
+)
 
 function submit() {
   const trimmed = text.value.trim()
@@ -31,10 +30,18 @@ function submit() {
   }
 }
 
+function cycleMode() {
+  const idx = MODES.findIndex((m) => m.id === settings.mode)
+  settings.mode = MODES[(idx + 1) % MODES.length].id
+}
+
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     submit()
+  } else if (e.key === 'Tab' && e.shiftKey) {
+    e.preventDefault()
+    cycleMode()
   }
 }
 
@@ -43,6 +50,12 @@ function autoResize(e: Event) {
   el.style.height = 'auto'
   el.style.height = Math.min(el.scrollHeight, 200) + 'px'
 }
+
+function focus() {
+  textarea.value?.focus()
+}
+
+defineExpose({ focus })
 </script>
 
 <template>
@@ -55,7 +68,7 @@ function autoResize(e: Event) {
         ref="textarea"
         v-model="text"
         class="w-full bg-transparent px-4 pt-3 pb-1 text-sm text-fg placeholder-fg-subtle resize-none outline-none min-h-11 max-h-50"
-        placeholder="Message Locus…"
+        :placeholder="placeholder"
         rows="1"
         :disabled="disabled || streaming"
         @keydown="onKeydown"
@@ -65,44 +78,16 @@ function autoResize(e: Event) {
       <div class="flex items-center justify-between px-3 pb-2.5">
         <!-- Left: model + permission mode -->
         <div class="flex items-center gap-2">
-          <span
-            v-if="settings.useLocalModel"
-            class="text-xs text-fg-muted border border-border-strong rounded-md px-2 py-1"
-          >
-            {{ settings.localModelName || 'Local model' }}
-          </span>
-          <select
-            v-else
-            v-model="settings.model"
-            class="text-xs text-fg-muted bg-transparent border border-border-strong rounded-md px-2 py-1 outline-none hover:border-border-strong cursor-pointer transition-colors"
-            :disabled="disabled || streaming"
-          >
-            <option v-for="m in MODELS" :key="m.id" :value="m.id">
-              {{ m.label }}
-            </option>
-          </select>
-
-          <select
-            v-model="permissionMode"
-            class="text-xs bg-transparent border rounded-md px-2 py-1 outline-none cursor-pointer transition-colors"
-            :class="
-              permissionMode === 'auto'
-                ? 'border-emerald-700/60 text-emerald-400 hover:border-emerald-600'
-                : 'border-border-strong text-fg-muted hover:border-border-strong'
-            "
-            :disabled="disabled || streaming"
-          >
-            <option value="ask">Ask permission</option>
-            <option value="auto">Auto edit</option>
-          </select>
+          <ModelPicker :disabled="disabled || streaming" />
+          <ModePicker :disabled="disabled" />
         </div>
 
         <!-- Right: hint + send/stop -->
         <div class="flex items-center gap-2">
-          <span class="text-xs text-fg-faint">⏎ send · ⇧⏎ newline</span>
+          <span class="text-xs text-fg-faint">⏎ send · ⇧⏎ newline · ⇧Tab mode</span>
           <button
             v-if="streaming"
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-fg-muted text-xs font-medium transition-colors cursor-pointer"
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-medium transition-colors cursor-pointer"
             @click="emit('cancel')"
           >
             <Square :size="12" />
