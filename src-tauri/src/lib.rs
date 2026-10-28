@@ -1,6 +1,9 @@
 mod agent;
 mod github;
+mod jira;
 mod settings;
+mod skills;
+mod taskmaster;
 mod teams;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -40,6 +43,16 @@ pub fn run() {
             settings::get_local_model_name,
             settings::set_local_model_name,
             github::get_pull_requests,
+            jira::get_jira_issues,
+            jira::set_jira_column,
+            jira::get_jira_issue_detail,
+            taskmaster::get_taskmaster_tasks,
+            taskmaster::set_taskmaster_status,
+            taskmaster::add_taskmaster_task,
+            taskmaster::init_taskmaster,
+            taskmaster::find_taskmaster_folders,
+            skills::list_skills,
+            skills::load_skill,
             teams::start_teams_auth,
             teams::get_teams_status,
             teams::get_teams_credentials,

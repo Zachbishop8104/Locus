@@ -5,11 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter};
 use serde_json::json;
-use tiberius::{Client as SqlClient, Config};
-use tokio::net::TcpStream;
 use tokio::sync::oneshot;
-use tokio_util::compat::TokioAsyncWriteCompatExt;
-use futures_util::future::FutureExt as _;
 
 use super::{Mode, PendingWriteEntry};
 use super::interceptor::{EditSpec, ParsedAction};
@@ -58,8 +54,8 @@ change until the task is done, then summarize what changed in a sentence or two.
     s
 }
 
-pub(crate) fn openai_tools_schema(has_files: bool, has_db: bool, allow_write: bool) -> Vec<serde_json::Value> {
-    anthropic_tools_schema(has_files, has_db, allow_write).into_iter().map(|t| json!({
+pub(crate) fn openai_tools_schema(has_files: bool, allow_write: bool) -> Vec<serde_json::Value> {
+    anthropic_tools_schema(has_files, allow_write).into_iter().map(|t| json!({
         "type": "function",
         "function": {
             "name": t["name"],
@@ -69,7 +65,7 @@ pub(crate) fn openai_tools_schema(has_files: bool, has_db: bool, allow_write: bo
     })).collect()
 }
 
-pub(crate) fn anthropic_tools_schema(has_files: bool, has_db: bool, allow_write: bool) -> Vec<serde_json::Value> {
+pub(crate) fn anthropic_tools_schema(has_files: bool, allow_write: bool) -> Vec<serde_json::Value> {
     let mut tools = vec![
         json!({"name":"locus_read","description":"Read a file's full contents","input_schema":{"type":"object","properties":{"path":{"type":"string","description":"Path relative to project root"}},"required":["path"]}}),
     ];
@@ -80,10 +76,6 @@ pub(crate) fn anthropic_tools_schema(has_files: bool, has_db: bool, allow_write:
     if has_files {
         tools.push(json!({"name":"locus_list","description":"List files in the project","input_schema":{"type":"object","properties":{"path":{"type":"string","description":"Subdirectory to list (omit for root)"}},"required":[]}}));
         tools.push(json!({"name":"locus_search","description":"Search for text across all project files","input_schema":{"type":"object","properties":{"pattern":{"type":"string","description":"Text to search for"}},"required":["pattern"]}}));
-    }
-    if has_db {
-        tools.push(json!({"name":"locus_query","description":"Run a read-only SQL SELECT query","input_schema":{"type":"object","properties":{"query":{"type":"string","description":"SQL SELECT statement"}},"required":["query"]}}));
-        tools.push(json!({"name":"locus_schema","description":"Get the full database schema","input_schema":{"type":"object","properties":{},"required":[]}}));
     }
     tools
 }
@@ -104,8 +96,6 @@ pub(crate) fn native_tool_to_action(fn_name: &str, args: &serde_json::Value) -> 
             (Some(p), Some(_), Some(_)) => Some(ParsedAction { args: args.clone(), ..ParsedAction::new("edit", p) }),
             _ => None,
         },
-        "locus_query"  => args["query"].as_str().map(|q| ParsedAction::new("query", q)),
-        "locus_schema" => Some(ParsedAction::new("schema", "")),
         _ => None,
     };
     parsed.unwrap_or_else(|| ParsedAction::new(
@@ -129,14 +119,13 @@ pub(crate) fn action_to_input(action: &ParsedAction) -> serde_json::Value {
             }),
             _ => json!({"path": action.write_parts().0}),
         },
-        "query"  => json!({"query": action.content.trim()}),
         _        => json!({}),
     }
 }
 
 // ─── Tag-based System Prompt (local Claude CLI only) ─────────────────────────
 
-pub(crate) fn tool_system_prompt(has_files: bool, has_db: bool, mode: Mode) -> String {
+pub(crate) fn tool_system_prompt(has_files: bool, mode: Mode) -> String {
     let mut s = String::from(
 "You are Locus, a coding assistant working inside the user's project. You act on the project \
 by writing locus tags in your reply. The app intercepts each tag, runs it, and sends you the \
@@ -148,10 +137,6 @@ result in the next message.
     if has_files {
         s.push_str("<locus:list>optional/subdir</locus:list>\n  Lists files in the project.\n\n");
         s.push_str("<locus:search>pattern</locus:search>\n  Searches for text across all project files.\n\n");
-    }
-    if has_db {
-        s.push_str("<locus:query>SELECT ...</locus:query>\n  Runs a read-only SQL query against the project database.\n\n");
-        s.push_str("<locus:schema></locus:schema>\n  Returns the full database schema.\n\n");
     }
     if mode.allows_write() {
         s.push_str(
@@ -197,46 +182,148 @@ result comes back, and summarize the changes in a sentence or two when done.
 
 pub(crate) async fn execute_action(
     action: &ParsedAction,
-    project_root: &str,
-    db_conn: Option<&str>,
+    workspace: &Workspace,
     app: &AppHandle,
     pending: Arc<Mutex<HashMap<String, PendingWriteEntry>>>,
     waiter: WaiterMap,
     mode: Mode,
 ) -> String {
     match action.name.as_str() {
-        "read"   => read_file_tool(project_root, action.content.trim()),
-        "list"   => list_files_tool(project_root, action.content.trim()),
-        "search" => search_code_tool(project_root, ".", action.content.trim()),
+        "read"   => {
+            let path = action.content.trim();
+            match workspace.split(path) {
+                Ok((root, _, rel)) => read_file_tool(root, rel, path),
+                Err(e) => e,
+            }
+        }
+        "list"   => workspace.list(action.content.trim()),
+        "search" => workspace.search(action.content.trim()),
         "write" | "edit" if !mode.allows_write() => {
             "Error: plan mode is on, so files cannot be changed. Present your plan and ask the user to approve it.".to_string()
         }
         "write"  => {
-            let (path, content) = action.write_parts();
-            if mode == Mode::AcceptEdits {
-                write_file_direct(app, project_root, path, content)
-            } else {
-                write_file_tool(app, pending, waiter, &next_write_id(), project_root, path, content).await
+            let (display, content) = action.write_parts();
+            let resolved = workspace.split(display).and_then(|(root, _, rel)| resolve_write_path(root, rel));
+            match resolved {
+                Err(e) => e,
+                Ok(path) if mode == Mode::AcceptEdits => write_file_direct(app, path, display, content),
+                Ok(path) => write_file_tool(app, pending, waiter, &next_write_id(), path, display, content).await,
             }
         }
         "edit"   => {
-            let edited = action.edit_parts().and_then(|spec| apply_edit(project_root, &spec).map(|c| (spec.path, c)));
+            let edited = action.edit_parts().and_then(|mut spec| {
+                let display = spec.path.clone();
+                let (root, _, rel) = workspace.split(&display)?;
+                spec.path = rel.to_string();
+                let content = apply_edit(root, &spec)?;
+                Ok((resolve_write_path(root, rel)?, display.clone(), content))
+            });
             match edited {
                 Err(e) => e,
-                Ok((path, content)) if mode == Mode::AcceptEdits => write_file_direct(app, project_root, &path, &content),
-                Ok((path, content)) => write_file_tool(app, pending, waiter, &next_write_id(), project_root, &path, &content).await,
+                Ok((path, display, content)) if mode == Mode::AcceptEdits => write_file_direct(app, path, &display, &content),
+                Ok((path, display, content)) => write_file_tool(app, pending, waiter, &next_write_id(), path, &display, &content).await,
             }
         }
         "invalid" => action.content.clone(),
-        "query" => match db_conn {
-            Some(conn) => query_sqlserver(conn, action.content.trim()).await,
-            None => "Error: no database configured for this project".to_string(),
-        },
-        "schema" => match db_conn {
-            Some(conn) => get_schema_sqlserver(conn).await,
-            None => "Error: no database configured for this project".to_string(),
-        },
         other => format!("Unknown tool: {}", other),
+    }
+}
+
+// ─── Workspace ────────────────────────────────────────────────────────────────
+
+struct Root {
+    name: String,
+    path: String,
+}
+
+/// The folders a chat works in. With one folder, paths are relative to it.
+/// With several, every path starts with a folder's name (e.g. `api/src/main.rs`).
+pub(crate) struct Workspace {
+    roots: Vec<Root>,
+}
+
+impl Workspace {
+    pub fn new(paths: &[String]) -> Self {
+        let mut roots: Vec<Root> = Vec::new();
+        for path in paths.iter().map(|p| p.trim()).filter(|p| !p.is_empty()) {
+            let base = Path::new(path).file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "folder".to_string());
+            let mut name = base.clone();
+            let mut n = 2;
+            while roots.iter().any(|r| r.name.eq_ignore_ascii_case(&name)) {
+                name = format!("{}-{}", base, n);
+                n += 1;
+            }
+            roots.push(Root { name, path: path.to_string() });
+        }
+        Workspace { roots }
+    }
+
+    pub fn has_files(&self) -> bool {
+        !self.roots.is_empty()
+    }
+
+    /// Explains the folder prefixes to the model. None with fewer than two folders.
+    pub fn prompt_note(&self) -> Option<String> {
+        if self.roots.len() < 2 { return None; }
+        let list = self.roots.iter().map(|r| format!("- {}/ ({})", r.name, r.path)).collect::<Vec<_>>().join("\n");
+        Some(format!(
+            "## Project folders\n\nThis chat works across {} folders. Start every file path with the folder \
+             name, e.g. `{}/src/main.rs`. Listing with no path shows all of them.\n\n{}",
+            self.roots.len(), self.roots[0].name, list,
+        ))
+    }
+
+    /// Split a model-supplied path into (root folder, display prefix, path relative to that root).
+    fn split<'a>(&'a self, path: &'a str) -> Result<(&'a str, String, &'a str), String> {
+        match self.roots.as_slice() {
+            [] => Ok(("", String::new(), path)),
+            [only] => Ok((&only.path, String::new(), path)),
+            roots => {
+                let trimmed = path.trim_start_matches("./");
+                let (head, rest) = trimmed.split_once(['/', '\\']).unwrap_or((trimmed, ""));
+                match roots.iter().find(|r| r.name.eq_ignore_ascii_case(head)) {
+                    Some(r) => Ok((&r.path, format!("{}/", r.name), rest)),
+                    None => Err(format!(
+                        "Error: '{}' does not start with a project folder. Start paths with one of: {}",
+                        path, roots.iter().map(|r| format!("{}/", r.name)).collect::<Vec<_>>().join(", "),
+                    )),
+                }
+            }
+        }
+    }
+
+    fn list(&self, path: &str) -> String {
+        let mut entries: Vec<String> = Vec::new();
+        let result = if self.roots.len() > 1 && (path.is_empty() || path == ".") {
+            self.roots.iter().try_for_each(|r| list_into(&r.path, "", &format!("{}/", r.name), &mut entries))
+        } else {
+            self.split(path).and_then(|(root, prefix, rel)| list_into(root, rel, &prefix, &mut entries))
+        };
+        if let Err(e) = result { return e; }
+        if entries.is_empty() { return "No files found".to_string(); }
+        let label = if path.is_empty() { "." } else { path };
+        let mut out = format!("Files in {}:\n{}", label, entries.join("\n"));
+        if entries.len() >= MAX_LIST { out.push_str("\n... (truncated at 300 files)"); }
+        out
+    }
+
+    fn search(&self, pattern: &str) -> String {
+        if pattern.is_empty() { return "Error: pattern is required".to_string(); }
+        let roots: Vec<(&str, String)> = match self.roots.as_slice() {
+            [] => vec![("", String::new())],
+            [only] => vec![(only.path.as_str(), String::new())],
+            roots => roots.iter().map(|r| (r.path.as_str(), format!("{}/", r.name))).collect(),
+        };
+        let mut matches: Vec<String> = Vec::new();
+        for (root, prefix) in roots {
+            if let Err(e) = search_into(root, &prefix, &pattern.to_lowercase(), &mut matches) { return e; }
+        }
+        if matches.is_empty() { return format!("No matches found for '{}'", pattern); }
+        let mut out = format!("Matches for '{}':\n{}", pattern, matches.join("\n"));
+        if matches.len() >= MAX_MATCHES { out.push_str("\n... (truncated at 50 matches)"); }
+        out
     }
 }
 
@@ -292,7 +379,7 @@ fn safe_path_for_write(project_root: &str, relative: &str) -> Result<PathBuf, St
     Ok(full)
 }
 
-pub(crate) fn read_file_tool(project_root: &str, path_str: &str) -> String {
+fn read_file_tool(project_root: &str, path_str: &str, display: &str) -> String {
     let path = if project_root.is_empty() {
         let p = PathBuf::from(path_str);
         if !p.is_absolute() { return "Error: no project is configured — provide an absolute file path".to_string(); }
@@ -310,7 +397,7 @@ pub(crate) fn read_file_tool(project_root: &str, path_str: &str) -> String {
             let numbered = content.lines().enumerate()
                 .map(|(i, line)| format!("{:4}\t{}", i + 1, line))
                 .collect::<Vec<_>>().join("\n");
-            format!("{}\n{}", path_str, numbered)
+            format!("{}\n{}", display, numbered)
         }
         Err(_) => "Error: file is not valid UTF-8 (binary file)".to_string(),
     }
@@ -366,8 +453,7 @@ fn apply_edit(project_root: &str, spec: &EditSpec) -> Result<String, String> {
 }
 
 /// Auto-accept mode: write immediately and tell the UI what changed.
-fn write_file_direct(app: &AppHandle, project_root: &str, file_path: &str, content: &str) -> String {
-    let path = match resolve_write_path(project_root, file_path) { Ok(p) => p, Err(e) => return e };
+fn write_file_direct(app: &AppHandle, path: PathBuf, file_path: &str, content: &str) -> String {
     if let Some(parent) = path.parent() {
         if let Err(e) = fs::create_dir_all(parent) { return format!("Error: {}", e); }
     }
@@ -385,11 +471,10 @@ pub(crate) async fn write_file_tool(
     pending: Arc<Mutex<HashMap<String, PendingWriteEntry>>>,
     waiter: WaiterMap,
     tool_use_id: &str,
-    project_root: &str,
+    path: PathBuf,
     file_path: &str,
     content: &str,
 ) -> String {
-    let path = match resolve_write_path(project_root, file_path) { Ok(p) => p, Err(e) => return e };
     let current_content = fs::read_to_string(&path).unwrap_or_default();
     pending.lock().unwrap().insert(
         tool_use_id.to_string(),
@@ -415,8 +500,11 @@ pub(crate) async fn write_file_tool(
     }
 }
 
+const MAX_LIST: usize = 300;
+const MAX_MATCHES: usize = 50;
+
 fn collect_files(dir: &Path, project_root: &Path, entries: &mut Vec<String>, depth: usize) {
-    if entries.len() >= 300 || depth > 8 { return; }
+    if entries.len() >= MAX_LIST || depth > 8 { return; }
     let Ok(read) = fs::read_dir(dir) else { return };
     let mut items: Vec<_> = read.filter_map(|e| e.ok()).collect();
     items.sort_by_key(|e| {
@@ -424,7 +512,7 @@ fn collect_files(dir: &Path, project_root: &Path, entries: &mut Vec<String>, dep
         (!is_dir, e.file_name().to_string_lossy().to_lowercase())
     });
     for entry in items {
-        if entries.len() >= 300 { break; }
+        if entries.len() >= MAX_LIST { break; }
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
         if name.starts_with('.') { continue; }
@@ -439,30 +527,23 @@ fn collect_files(dir: &Path, project_root: &Path, entries: &mut Vec<String>, dep
     }
 }
 
-pub(crate) fn list_files_tool(project_root: &str, relative_path: &str) -> String {
-    let start = if relative_path.is_empty() || relative_path == "." {
-        match fs::canonicalize(project_root) { Ok(p) => p, Err(e) => return format!("Error: {}", e) }
-    } else {
-        match safe_path(project_root, relative_path) { Ok(p) => p, Err(e) => return format!("Error: {}", e) }
-    };
-    let root = match fs::canonicalize(project_root) { Ok(p) => p, Err(e) => return format!("Error: {}", e) };
-    let mut entries: Vec<String> = Vec::new();
-    collect_files(&start, &root, &mut entries, 0);
-    if entries.is_empty() { return "No files found".to_string(); }
-    let label = if relative_path.is_empty() { "." } else { relative_path };
-    let truncated = entries.len() == 300;
-    let mut out = format!("Files in {}:\n{}", label, entries.join("\n"));
-    if truncated { out.push_str("\n... (truncated at 300 files)"); }
-    out
+/// Append files under `root/rel` to `entries`, each path prefixed with `prefix`.
+fn list_into(root: &str, rel: &str, prefix: &str, entries: &mut Vec<String>) -> Result<(), String> {
+    let base = fs::canonicalize(root).map_err(|e| format!("Error: {}", e))?;
+    let start = if rel.is_empty() || rel == "." { base.clone() } else { safe_path(root, rel).map_err(|e| format!("Error: {}", e))? };
+    let from = entries.len();
+    collect_files(&start, &base, entries, 0);
+    for e in &mut entries[from..] { e.insert_str(0, prefix); }
+    Ok(())
 }
 
 fn search_recursive(dir: &Path, project_root: &Path, pattern: &str, matches: &mut Vec<String>) {
-    if matches.len() >= 50 { return; }
+    if matches.len() >= MAX_MATCHES { return; }
     let Ok(read) = fs::read_dir(dir) else { return };
     let mut items: Vec<_> = read.filter_map(|e| e.ok()).collect();
     items.sort_by_key(|e| e.file_name().to_string_lossy().to_lowercase());
     for entry in items {
-        if matches.len() >= 50 { break; }
+        if matches.len() >= MAX_MATCHES { break; }
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
         if name.starts_with('.') { continue; }
@@ -477,7 +558,7 @@ fn search_recursive(dir: &Path, project_root: &Path, pattern: &str, matches: &mu
                 for (i, line) in content.lines().enumerate() {
                     if line.to_lowercase().contains(pattern) {
                         matches.push(format!("{}:{}: {}", rel, i + 1, line.trim()));
-                        if matches.len() >= 50 { break; }
+                        if matches.len() >= MAX_MATCHES { break; }
                     }
                 }
             }
@@ -485,139 +566,13 @@ fn search_recursive(dir: &Path, project_root: &Path, pattern: &str, matches: &mu
     }
 }
 
-pub(crate) fn search_code_tool(project_root: &str, relative_path: &str, pattern: &str) -> String {
-    if pattern.is_empty() { return "Error: pattern is required".to_string(); }
-    let search_dir = if relative_path.is_empty() || relative_path == "." {
-        match fs::canonicalize(project_root) { Ok(p) => p, Err(e) => return format!("Error: {}", e) }
-    } else {
-        match safe_path(project_root, relative_path) { Ok(p) => p, Err(e) => return format!("Error: {}", e) }
-    };
-    let root = match fs::canonicalize(project_root) { Ok(p) => p, Err(e) => return format!("Error: {}", e) };
-    let mut matches: Vec<String> = Vec::new();
-    search_recursive(&search_dir, &root, &pattern.to_lowercase(), &mut matches);
-    if matches.is_empty() { return format!("No matches found for '{}'", pattern); }
-    let truncated = matches.len() == 50;
-    let mut out = format!("Matches for '{}':\n{}", pattern, matches.join("\n"));
-    if truncated { out.push_str("\n... (truncated at 50 matches)"); }
-    out
-}
-
-// ─── SQL Tool ─────────────────────────────────────────────────────────────────
-
-fn is_read_only_sql(query: &str) -> bool {
-    let upper = query.trim().to_uppercase();
-    if !upper.starts_with("SELECT") && !upper.starts_with("WITH") { return false; }
-    let blocked = ["INSERT ", "UPDATE ", "DELETE ", "DROP ", "CREATE ", "ALTER ", "TRUNCATE ", "EXEC ", "EXECUTE ", "MERGE ", "BULK "];
-    !blocked.iter().any(|kw| upper.contains(kw))
-}
-
-fn extract_primary_table(query: &str) -> Option<String> {
-    let upper = query.to_uppercase();
-    let from_pos = upper.find(" FROM ")? + 6;
-    let after_from = query[from_pos..].trim_start();
-    if after_from.starts_with('(') { return None; }
-    let end = after_from.find(|c: char| c.is_whitespace() || c == ',' || c == ')').unwrap_or(after_from.len());
-    let raw = after_from[..end].trim_matches(|c| c == '[' || c == ']' || c == '"');
-    raw.split('.').last()
-        .map(|s| s.trim_matches(|c| c == '[' || c == ']' || c == '"').to_string())
-        .filter(|s| !s.is_empty())
-}
-
-fn rewrite_select_star(query: &str, cols: &[String]) -> Option<String> {
-    let upper = query.to_uppercase();
-    let from_pos = upper.find(" FROM ")?;
-    let select_clause = query[..from_pos].trim();
-    let from_onward = &query[from_pos..];
-    let upper_clause = select_clause.to_uppercase();
-    let col_list = cols.iter().map(|c| format!("[{}]", c.replace(']', "]]"))).collect::<Vec<_>>().join(", ");
-    if upper_clause == "SELECT *" { return Some(format!("SELECT {}{}", col_list, from_onward)); }
-    if upper_clause.starts_with("SELECT TOP") && select_clause.trim_end().ends_with('*') {
-        let star_pos = select_clause.rfind('*')?;
-        let prefix = select_clause[..star_pos].trim_end();
-        let after_top = prefix["SELECT TOP".len()..].trim().trim_matches(|c| c == '(' || c == ')');
-        if after_top.chars().all(|c| c.is_ascii_digit()) {
-            return Some(format!("{} {}{}", prefix, col_list, from_onward));
-        }
-    }
-    None
-}
-
-fn cell_to_string(row: &tiberius::Row, idx: usize) -> String {
-    macro_rules! try_as { ($t:ty) => { if let Ok(v) = row.try_get::<$t, _>(idx) { return v.map(|n| n.to_string()).unwrap_or_else(|| "NULL".to_string()); } }; }
-    if let Ok(v) = row.try_get::<&str, _>(idx) { return v.unwrap_or("NULL").to_string(); }
-    try_as!(i64); try_as!(i32); try_as!(i16); try_as!(u8); try_as!(f64); try_as!(f32); try_as!(bool);
-    "?".to_string()
-}
-
-async fn auto_recover_udt(connection_string: &str, original_query: &str) -> String {
-    let table_name = match extract_primary_table(original_query) {
-        Some(t) => t,
-        None => return "Error: query hit an unsupported column type. Try selecting specific columns.".to_string(),
-    };
-    let cols_query = format!(
-        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = N'{}' \
-         AND DATA_TYPE NOT IN ('geometry','geography','hierarchyid','sql_variant') ORDER BY ORDINAL_POSITION",
-        table_name.replace('\'', "''")
-    );
-    let cols_output = Box::pin(query_sqlserver(connection_string, &cols_query)).await;
-    if cols_output.starts_with("Error") || cols_output == "Query returned 0 rows" {
-        return format!("Error: table '{}' contains an unsupported column type and safe columns could not be retrieved.", table_name);
-    }
-    let safe_cols: Vec<String> = cols_output.lines().skip(2)
-        .map(|l| l.trim().to_string())
-        .filter(|s| !s.is_empty() && !s.starts_with('(') && !s.starts_with('-'))
-        .collect();
-    if safe_cols.is_empty() { return format!("Error: no supported columns found for table '{}'.", table_name); }
-    match rewrite_select_star(original_query, &safe_cols) {
-        Some(rewritten) => Box::pin(query_sqlserver(connection_string, &rewritten)).await,
-        None => format!("Could not auto-rewrite query. Supported columns for '{}': {}", table_name, safe_cols.iter().map(|c| format!("[{}]", c)).collect::<Vec<_>>().join(", ")),
-    }
-}
-
-pub(crate) async fn query_sqlserver(connection_string: &str, query: &str) -> String {
-    if !is_read_only_sql(query) { return "Error: only SELECT and WITH (CTE) queries are allowed".to_string(); }
-    let config = match Config::from_ado_string(connection_string) { Ok(c) => c, Err(e) => return format!("Error: invalid connection string — {}", e) };
-    let addr = config.get_addr();
-    let tcp = match TcpStream::connect(addr).await { Ok(t) => t, Err(e) => return format!("Error: could not reach server — {}", e) };
-    let _ = tcp.set_nodelay(true);
-    let mut client = match SqlClient::connect(config, tcp.compat_write()).await { Ok(c) => c, Err(e) => return format!("Error: connection failed — {}", e) };
-    let params: &[&dyn tiberius::ToSql] = &[];
-    let stream = match std::panic::AssertUnwindSafe(client.query(query, params)).catch_unwind().await {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => return format!("Error executing query: {}", e),
-        Err(_) => return auto_recover_udt(connection_string, query).await,
-    };
-    let rows = match std::panic::AssertUnwindSafe(stream.into_first_result()).catch_unwind().await {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => return format!("Error reading results: {}", e),
-        Err(_) => return auto_recover_udt(connection_string, query).await,
-    };
-    if rows.is_empty() { return "Query returned 0 rows".to_string(); }
-    let columns: Vec<String> = rows[0].columns().iter().map(|c| c.name().to_string()).collect();
-    let col_widths: Vec<usize> = columns.iter().enumerate()
-        .map(|(i, name)| rows.iter().take(200).map(|r| cell_to_string(r, i).len()).max().unwrap_or(0).max(name.len()).min(60))
-        .collect();
-    let header = columns.iter().zip(&col_widths).map(|(n, w)| format!("{:<width$}", n, width = w)).collect::<Vec<_>>().join("  ");
-    let divider = col_widths.iter().map(|w| "-".repeat(*w)).collect::<Vec<_>>().join("  ");
-    let max_rows = 200;
-    let truncated = rows.len() > max_rows;
-    let body = rows.iter().take(max_rows)
-        .map(|row| (0..columns.len()).zip(&col_widths).map(|(i, w)| { let v = cell_to_string(row, i); format!("{:<width$}", &v[..v.len().min(60)], width = w) }).collect::<Vec<_>>().join("  "))
-        .collect::<Vec<_>>().join("\n");
-    let mut out = format!("{}\n{}\n{}", header, divider, body);
-    out.push_str(&if truncated { format!("\n\n... showing {} of {} rows", max_rows, rows.len()) } else { format!("\n\n({} row{})", rows.len(), if rows.len() == 1 { "" } else { "s" }) });
-    out
-}
-
-pub(crate) async fn get_schema_sqlserver(connection_string: &str) -> String {
-    query_sqlserver(connection_string, "\
-        SELECT t.TABLE_SCHEMA, t.TABLE_NAME, c.COLUMN_NAME, c.DATA_TYPE, \
-               c.CHARACTER_MAXIMUM_LENGTH, c.IS_NULLABLE, c.COLUMN_DEFAULT \
-        FROM INFORMATION_SCHEMA.TABLES t \
-        JOIN INFORMATION_SCHEMA.COLUMNS c \
-            ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME \
-        WHERE t.TABLE_TYPE = 'BASE TABLE' \
-        ORDER BY t.TABLE_SCHEMA, t.TABLE_NAME, c.ORDINAL_POSITION").await
+/// Append matches for a lowercase `pattern` under `root` to `matches`, each path prefixed with `prefix`.
+fn search_into(root: &str, prefix: &str, pattern: &str, matches: &mut Vec<String>) -> Result<(), String> {
+    let base = fs::canonicalize(root).map_err(|e| format!("Error: {}", e))?;
+    let from = matches.len();
+    search_recursive(&base, &base, pattern, matches);
+    for m in &mut matches[from..] { m.insert_str(0, prefix); }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -702,5 +657,31 @@ mod tests {
     fn malformed_native_edit_becomes_invalid() {
         let action = native_tool_to_action("locus_edit", &json!({"path": "f.txt"}));
         assert_eq!(action.name, "invalid");
+    }
+
+    #[test]
+    fn multi_folder_paths_use_folder_prefix() {
+        let (dir_a, root_a) = project_with("multi_a", "alpha\n");
+        let (dir_b, root_b) = project_with("multi_b", "beta\n");
+        let ws = Workspace::new(&[root_a.clone(), root_b.clone()]);
+        let name_a = dir_a.file_name().unwrap().to_string_lossy().to_string();
+        let name_b = dir_b.file_name().unwrap().to_string_lossy().to_string();
+
+        let path_b = format!("{}/f.txt", name_b);
+        let (root, prefix, rel) = ws.split(&path_b).unwrap();
+        assert_eq!((root, prefix.as_str(), rel), (root_b.as_str(), format!("{}/", name_b).as_str(), "f.txt"));
+        assert!(ws.split("f.txt").is_err());
+
+        let listing = ws.list("");
+        assert!(listing.contains(&format!("{}/f.txt", name_a)) && listing.contains(&format!("{}/f.txt", name_b)));
+        assert!(ws.search("beta").contains(&format!("{}/f.txt:1: beta", name_b)));
+
+        // A single folder keeps plain relative paths.
+        let single = Workspace::new(&[root_a.clone()]);
+        assert_eq!(single.split("f.txt").unwrap().2, "f.txt");
+        assert!(single.list("").contains("\nf.txt"));
+
+        fs::remove_dir_all(dir_a).ok();
+        fs::remove_dir_all(dir_b).ok();
     }
 }

@@ -5,6 +5,8 @@ export interface Message {
   timestamp: string
   error?: boolean
   cancelled?: boolean  // rejected write — shown in chat but excluded from API context
+  /** What the model receives when it differs from what is shown, e.g. a /skill expanded into its instructions. */
+  sent?: string
 }
 
 export interface Conversation {
@@ -13,19 +15,36 @@ export interface Conversation {
   messages: Message[]
   createdAt: string
   projectId?: string
+  /** Which of the project's folders this chat works in. Falls back to the first one. */
+  localPaths?: string[]
+  /** The board card (Jira issue, task-master task or PR) this chat is about. */
+  task?: TaskRef
+  /** Text to put in the message box when the chat is next opened. */
+  draft?: string
+}
+
+export type TaskSource = 'jira' | 'taskmaster' | 'pr'
+
+/** A snapshot of a board card, saved on the chats linked to it. */
+export interface TaskRef {
+  /** Stable card key, e.g. `jira:LOC-12`, `tm:C:\repo#3`, `pr:owner/repo#42`. */
+  key: string
+  source: TaskSource
+  /** What the card shows as its id: `LOC-12`, `#3`, `repo#42`. */
+  label: string
+  title: string
+  url?: string
 }
 
 export interface Project {
   id: string
   name: string
   description: string
-  localPath: string
+  localPaths: string[]
   gitRepo: string
   jiraProject: string
   color: string
   createdAt: string
-  dbType?: string
-  dbConnectionString?: string
 }
 
 export interface EditRequest {
@@ -34,12 +53,6 @@ export interface EditRequest {
   currentContent: string
   newContent: string
 }
-
-export const DB_TYPES = [
-  { value: 'sqlserver', label: 'SQL Server' },
-] as const
-
-export type DbType = typeof DB_TYPES[number]['value']
 
 export const PROJECT_COLORS = [
   '#2D6A4F',
@@ -120,6 +133,10 @@ export interface PullRequest {
   reviewDecision: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null
   checks: 'SUCCESS' | 'FAILURE' | 'ERROR' | 'PENDING' | 'EXPECTED' | null
   comments: number
+  /** Your latest verdict on someone else's PR. */
+  viewerReview: 'APPROVED' | 'CHANGES_REQUESTED' | 'DISMISSED' | null
+  /** You commented, or left a comment-only review. */
+  viewerCommented: boolean
 }
 
 export interface PullRequestLists {
@@ -127,4 +144,75 @@ export interface PullRequestLists {
   reviewRequested: PullRequest[]
   authored: PullRequest[]
   involved: PullRequest[]
+}
+
+export interface JiraIssue {
+  key: string
+  project: string
+  projectName: string | null
+  summary: string
+  status: string
+  statusCategory: 'new' | 'indeterminate' | 'done' | string
+  issueType: string | null
+  priority: string | null
+  assignee: string | null
+  updated: string | null
+  url: string | null
+}
+
+export interface TmFolder {
+  path: string
+  remote: string | null
+}
+
+export type TmStatus = 'pending' | 'in-progress' | 'review' | 'done' | 'blocked' | 'deferred' | 'cancelled'
+
+export interface TmTask {
+  id: string
+  title: string
+  description: string
+  details: string
+  status: TmStatus
+  priority: string | null
+  dependencies: string[]
+  testStrategy: string
+  subtasks: TmSubtask[]
+  subtasksTotal: number
+  subtasksDone: number
+}
+
+export interface TmSubtask {
+  id: string
+  title: string
+  description: string
+  details: string
+  status: TmStatus
+}
+
+export interface JiraIssueLink {
+  key: string
+  summary: string
+  status: string | null
+}
+
+export interface JiraIssueDetail {
+  key: string
+  /** Markdown. */
+  description: string
+  issueType: string | null
+  reporter: string | null
+  created: string | null
+  labels: string[]
+  parent: JiraIssueLink | null
+  subtasks: JiraIssueLink[]
+  comments: { author: string | null; created: string | null; body: string }[]
+}
+
+export interface Skill {
+  name: string
+  description: string
+  source: 'user' | 'project' | 'plugin'
+  /** `skill`: a SKILL.md folder. `command`: a single .md file that takes $ARGUMENTS. */
+  kind: 'skill' | 'command'
+  path: string
 }

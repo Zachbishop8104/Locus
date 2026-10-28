@@ -15,7 +15,7 @@ use tokio::io::AsyncWriteExt;
 
 use interceptor::TagInterceptor;
 use stream::{cli_command, cli_auth_hint, cli_launch_error, stream_turn_claude_api, stream_turn_claude_cli, stream_turn_openai_compat, CANCELLED};
-use tools::{action_to_input, api_system_prompt, anthropic_tools_schema, execute_action, openai_tools_schema, tool_system_prompt};
+use tools::{action_to_input, api_system_prompt, anthropic_tools_schema, execute_action, openai_tools_schema, tool_system_prompt, Workspace};
 
 // ─── Shared State ─────────────────────────────────────────────────────────────
 
@@ -200,8 +200,7 @@ pub async fn stream_message(
     effort: Option<String>,
     mode: String,
     system: Option<String>,
-    project_path: Option<String>,
-    db_connection_string: Option<String>,
+    project_paths: Option<Vec<String>>,
 ) -> Result<(), String> {
     let provider = Provider::parse(&provider)?;
     let mode = Mode::parse(&mode);
@@ -213,28 +212,32 @@ pub async fn stream_message(
     let mine = generation.fetch_add(1, Ordering::SeqCst) + 1;
     let cancel = CancelToken { generation, mine };
 
-    let has_files = project_path.is_some();
-    let has_db    = db_connection_string.is_some();
+    let workspace = Workspace::new(project_paths.as_deref().unwrap_or_default());
+    let has_files = workspace.has_files();
     let allow_write = mode.allows_write();
 
-    let cli_system = {
-        let tag_prompt = tool_system_prompt(has_files, has_db, mode);
-        match &system {
-            Some(s) if !s.is_empty() => format!("{}\n\n{}", tag_prompt, s),
-            _ => tag_prompt,
-        }
-    };
-    let api_sys = api_system_prompt(system.as_deref(), mode);
+    let mut cli_system = tool_system_prompt(has_files, mode);
+    let mut api_sys = api_system_prompt(system.as_deref(), mode);
+    if let Some(note) = workspace.prompt_note() {
+        cli_system = format!("{}
+{}", cli_system, note);
+        api_sys = format!("{}
+
+{}", api_sys, note);
+    }
+    if let Some(s) = system.as_deref().filter(|s| !s.is_empty()) {
+        cli_system = format!("{}
+
+{}", cli_system, s);
+    }
     let local = local_endpoint(&app);
 
-    let root    = project_path.as_deref().unwrap_or("").to_string();
-    let db_conn = db_connection_string.clone();
     let pending = app.state::<PendingWriteState>().0.clone();
     let waiter  = app.state::<ApprovalWaiter>().0.clone();
     let client  = Client::new();
 
-    let oai_tools = openai_tools_schema(has_files, has_db, allow_write);
-    let ant_tools = anthropic_tools_schema(has_files, has_db, allow_write);
+    let oai_tools = openai_tools_schema(has_files, allow_write);
+    let ant_tools = anthropic_tools_schema(has_files, allow_write);
 
     let mut conv: Vec<serde_json::Value> = messages.iter()
         .map(|m| json!({"role": m.role, "content": m.content}))
@@ -299,7 +302,7 @@ pub async fn stream_message(
         for call in &turn.calls {
             let _ = app.emit("claude:tool_use", call.action.to_tool_use_event());
             let result = execute_action(
-                &call.action, &root, db_conn.as_deref(), &app,
+                &call.action, &workspace, &app,
                 pending.clone(), waiter.clone(), Mode::from_u8(live_mode.load(Ordering::SeqCst)),
             ).await;
             if cancel.is_cancelled() { return Ok(()); }
@@ -311,8 +314,6 @@ pub async fn stream_message(
                 "read"   => format!("Contents of {}", call.action.content.trim().lines().next().unwrap_or("file")),
                 "list"   => "Project files".to_string(),
                 "search" => format!("Search results for \"{}\"", call.action.content.trim()),
-                "schema" => "Database schema".to_string(),
-                "query"  => "Query results".to_string(),
                 other    => format!("{} result", other),
             };
             results.push(format!("=== {} ===\n{}", label, result));

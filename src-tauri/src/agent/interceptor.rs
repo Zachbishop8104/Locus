@@ -7,7 +7,7 @@ pub(crate) struct NativeCall {
 }
 
 pub(crate) struct ParsedAction {
-    pub name: String,    // "read" | "write" | "edit" | "search" | "list" | "query" | "schema"
+    pub name: String,    // "read" | "write" | "edit" | "search" | "list"
     pub content: String, // trimmed content between the tags
     /// Structured arguments from a native tool call; Null for tag-based calls.
     pub args: serde_json::Value,
@@ -96,8 +96,6 @@ impl ParsedAction {
             "read"   => json!({"name": "read_file",        "input": {"path":    self.content.trim()}}),
             "search" => json!({"name": "search_code",      "input": {"pattern": self.content.trim()}}),
             "list"   => json!({"name": "list_files",       "input": {"path":    self.content.trim()}}),
-            "query"  => json!({"name": "query_database",   "input": {"query":   self.content.trim()}}),
-            "schema" => json!({"name": "get_database_schema", "input": {}}),
             other    => json!({"name": other, "input": {}}),
         }
     }

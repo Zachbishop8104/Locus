@@ -1,0 +1,39 @@
+{
+  "master": {
+    "tasks": [
+      {
+        "id": "1",
+        "title": "Kanban board page",
+        "description": "Board view that combines Jira issues, task-master tasks and GitHub PRs, with each card linked to Locus chats.",
+        "details": "",
+        "testStrategy": "",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-10-28T19:14:17.987Z"
+      },
+      {
+        "id": "2",
+        "title": "Set up the Jira CLI for the board",
+        "description": "Install the Atlassian CLI (acli), run 'acli jira auth login --web', and set a Jira project key on each Locus project so its issues show on the board.",
+        "details": "",
+        "testStrategy": "",
+        "status": "done",
+        "dependencies": [],
+        "priority": "medium",
+        "subtasks": [],
+        "updatedAt": "2026-10-28T19:14:31.966Z"
+      }
+    ],
+    "metadata": {
+      "version": "1.0.0",
+      "lastModified": "2026-10-28T19:14:31.966Z",
+      "taskCount": 2,
+      "completedCount": 2,
+      "tags": [
+        "master"
+      ]
+    }
+  }
+}

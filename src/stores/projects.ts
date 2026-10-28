@@ -34,4 +34,36 @@ export const useProjectsStore = defineStore('projects', () => {
   }
 
   return { projects, createProject, updateProject, deleteProject, getById, nextColor }
-}, { persist: true })
+}, {
+  persist: {
+    // Migrate older saved shapes to the current one:
+    //   - `gitRepos: string[]` (short-lived multi-repo version) → `gitRepo: string` (first non-blank entry)
+    //   - `localPath: string` → `localPaths: string[]` (one entry per local clone)
+    //   - `dbType` / `dbConnectionString` removed (connection strings live in each project's own code)
+    afterHydrate: (ctx) => {
+      const list = ctx.store.projects as (Project & {
+        gitRepos?: unknown
+        localPath?: unknown
+        dbType?: unknown
+        dbConnectionString?: unknown
+      })[]
+      for (const p of list) {
+        delete p.dbType
+        delete p.dbConnectionString
+
+        if (typeof p.gitRepo !== 'string') {
+          const repos = Array.isArray(p.gitRepos) ? p.gitRepos : []
+          const first = repos.find((r): r is string => typeof r === 'string' && r.trim() !== '')
+          p.gitRepo = first?.trim() ?? ''
+        }
+        delete p.gitRepos
+
+        if (!Array.isArray(p.localPaths)) {
+          const old = typeof p.localPath === 'string' ? p.localPath.trim() : ''
+          p.localPaths = old ? [old] : []
+        }
+        delete p.localPath
+      }
+    },
+  },
+})

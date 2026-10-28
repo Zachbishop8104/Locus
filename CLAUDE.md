@@ -13,3 +13,7 @@ The AI layer (`src-tauri/src/agent.rs`) is model-agnostic. All providers — Cla
 **Adding a new capability:** add a case in `execute_action()`, a schema in `anthropic_tools_schema()` plus a mapping in `native_tool_to_action()`, and a tag instruction in `tool_system_prompt()`. No frontend changes are needed unless it needs new UI.
 
 **Models that can follow instructions work.** Claude, Qwen3, Llama3, Mistral. The fallback when a model ignores the tools is graceful — no actions means the loop ends cleanly.
+
+## Task Master AI Instructions
+**Import Task Master's development workflow commands and guidelines, treat as if import is in the main CLAUDE.md file.**
+@./.taskmaster/CLAUDE.md

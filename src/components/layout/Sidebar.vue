@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { MessageSquare, FolderOpen, Settings, Plus, Trash2, Users, Pencil, ChevronRight } from '@lucide/vue'
+import { MessageSquare, FolderOpen, Settings, Plus, Trash2, Users, Pencil, ChevronRight, SquareKanban } from '@lucide/vue'
 import { useChatStore } from '@/stores/chat'
 import { useProjectsStore } from '@/stores/projects'
 import type { Conversation } from '@/types'
@@ -14,6 +14,7 @@ const projects = useProjectsStore()
 
 const navItems = [
   { path: '/chat', icon: MessageSquare, label: 'Chat' },
+  { path: '/board', icon: SquareKanban, label: 'Board' },
   { path: '/teams', icon: Users, label: 'Teams' },
   { path: '/projects', icon: FolderOpen, label: 'Projects' },
 ]

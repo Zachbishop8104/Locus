@@ -1,7 +1,10 @@
 <script setup lang="ts">
+import { useRoute } from 'vue-router'
 import Sidebar from './Sidebar.vue'
 import PullRequestsPanel from './PullRequestsPanel.vue'
 import DiffPanel from '@/components/chat/DiffPanel.vue'
+
+const route = useRoute()
 </script>
 
 <template>
@@ -11,6 +14,7 @@ import DiffPanel from '@/components/chat/DiffPanel.vue'
       <router-view />
       <DiffPanel />
     </main>
-    <PullRequestsPanel />
+    <!-- The board has its own PR column. -->
+    <PullRequestsPanel v-if="route.path !== '/board'" />
   </div>
 </template>

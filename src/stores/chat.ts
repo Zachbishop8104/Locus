@@ -98,4 +98,17 @@ export const useChatStore = defineStore('chat', () => {
     deleteConversation,
     conversationsForProject,
   }
-}, { persist: true })
+}, {
+  persist: {
+    // Migrate the single-folder `localPath: string` to `localPaths: string[]`.
+    afterHydrate: (ctx) => {
+      const list = ctx.store.conversations as (Conversation & { localPath?: unknown })[]
+      for (const c of list) {
+        if (!Array.isArray(c.localPaths) && typeof c.localPath === 'string' && c.localPath) {
+          c.localPaths = [c.localPath]
+        }
+        delete c.localPath
+      }
+    },
+  },
+})

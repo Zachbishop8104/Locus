@@ -16,8 +16,9 @@ fragment pr on PullRequest {
   repository { nameWithOwner }
   author { login avatarUrl }
   reviewDecision
-  comments { totalCount }
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+  reviews(last: 50) { nodes { author { login } state } }
+  comments(last: 50) { totalCount nodes { author { login } } }
 }
 "#;
 
@@ -38,6 +39,10 @@ pub struct PullRequest {
     /// SUCCESS | FAILURE | ERROR | PENDING | EXPECTED, or None when there are no checks.
     checks: Option<String>,
     comments: u64,
+    /// The viewer's latest verdict: APPROVED | CHANGES_REQUESTED | DISMISSED, or None.
+    viewer_review: Option<String>,
+    /// The viewer left a comment or a comment-only review.
+    viewer_commented: bool,
 }
 
 #[derive(Serialize)]
@@ -50,11 +55,26 @@ pub struct PullRequestLists {
     involved: Vec<PullRequest>,
 }
 
-fn parse_prs(nodes: &serde_json::Value) -> Vec<PullRequest> {
+fn by_viewer(n: &serde_json::Value, login: &str) -> bool {
+    !login.is_empty() && n["author"]["login"].as_str() == Some(login)
+}
+
+fn parse_prs(nodes: &serde_json::Value, login: &str) -> Vec<PullRequest> {
     nodes.as_array().map(|arr| arr.iter()
         // Search can return empty objects for items the token can't see.
         .filter(|n| n["id"].is_string())
-        .map(|n| PullRequest {
+        .map(|n| {
+            let empty = Vec::new();
+            let reviews: Vec<&serde_json::Value> = n["reviews"]["nodes"].as_array().unwrap_or(&empty).iter()
+                .filter(|r| by_viewer(r, login)).collect();
+            // Reviews are oldest first, so the last verdict is the current one.
+            let viewer_review = reviews.iter().rev()
+                .filter_map(|r| r["state"].as_str())
+                .find(|s| matches!(*s, "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"))
+                .map(|s| s.to_string());
+            let viewer_commented = reviews.iter().any(|r| r["state"] == "COMMENTED")
+                || n["comments"]["nodes"].as_array().is_some_and(|c| c.iter().any(|c| by_viewer(c, login)));
+            PullRequest {
             id: n["id"].as_str().unwrap_or("").to_string(),
             number: n["number"].as_u64().unwrap_or(0),
             title: n["title"].as_str().unwrap_or("").to_string(),
@@ -67,7 +87,9 @@ fn parse_prs(nodes: &serde_json::Value) -> Vec<PullRequest> {
             review_decision: n["reviewDecision"].as_str().map(|s| s.to_string()),
             checks: n["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"].as_str().map(|s| s.to_string()),
             comments: n["comments"]["totalCount"].as_u64().unwrap_or(0),
-        })
+            viewer_review,
+            viewer_commented,
+        }})
         .collect()
     ).unwrap_or_default()
 }
@@ -107,15 +129,16 @@ pub async fn get_pull_requests() -> Result<PullRequestLists, String> {
     }
     let data = &json["data"];
 
-    let review_requested = parse_prs(&data["reviewRequested"]["nodes"]);
-    let authored = parse_prs(&data["authored"]["nodes"]);
+    let login = data["viewer"]["login"].as_str().unwrap_or("");
+    let review_requested = parse_prs(&data["reviewRequested"]["nodes"], login);
+    let authored = parse_prs(&data["authored"]["nodes"], login);
     let seen: HashSet<String> = review_requested.iter().chain(&authored).map(|p| p.id.clone()).collect();
-    let involved = parse_prs(&data["involved"]["nodes"]).into_iter()
+    let involved = parse_prs(&data["involved"]["nodes"], login).into_iter()
         .filter(|p| !seen.contains(&p.id))
         .collect();
 
     Ok(PullRequestLists {
-        login: data["viewer"]["login"].as_str().unwrap_or("").to_string(),
+        login: login.to_string(),
         review_requested,
         authored,
         involved,

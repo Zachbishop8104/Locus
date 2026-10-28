@@ -17,8 +17,7 @@ export interface StreamRequest {
   mode: PermissionMode
   messages: { role: 'user' | 'assistant'; content: string }[]
   system?: string
-  projectPath?: string
-  dbConnectionString?: string
+  projectPaths?: string[]
   onDelta: (text: string) => void
   onDone: () => void
   onError: (err: string) => void
@@ -100,8 +99,7 @@ export function useClaudeStream() {
         effort: req.effort,
         mode: req.mode,
         system: req.system ?? null,
-        projectPath: req.projectPath ?? null,
-        dbConnectionString: req.dbConnectionString ?? null,
+        projectPaths: req.projectPaths?.length ? req.projectPaths : null,
       })
     } catch (e) {
       // Errors already emitted as claude:error have cleaned up; this covers

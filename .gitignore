@@ -30,3 +30,6 @@ dist-ssr
 *.env
 
 .claude
+
+# Task Master
+dev-debug.log

@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { Plus, Folder, FolderOpen, Trash2, MessageSquare, ExternalLink, GitBranch, Ticket, Database } from '@lucide/vue'
+import { Plus, Folder, FolderOpen, Trash2, MessageSquare, ExternalLink, GitBranch, Ticket, X } from '@lucide/vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useProjectsStore } from '@/stores/projects'
 import { useChatStore } from '@/stores/chat'
 import type { Project } from '@/types'
-import { PROJECT_COLORS, DB_TYPES } from '@/types'
+import { PROJECT_COLORS } from '@/types'
 
 const router = useRouter()
 const projectsStore = useProjectsStore()
@@ -18,12 +18,10 @@ const selectedId = ref<string | 'new' | null>(null)
 const blankForm = (): Omit<Project, 'id' | 'createdAt'> => ({
   name: '',
   description: '',
-  localPath: '',
+  localPaths: [''],
   gitRepo: '',
   jiraProject: '',
   color: projectsStore.nextColor(),
-  dbType: '',
-  dbConnectionString: '',
 })
 
 const form = ref(blankForm())
@@ -33,12 +31,10 @@ function selectProject(p: Project) {
   form.value = {
     name: p.name,
     description: p.description,
-    localPath: p.localPath,
-    gitRepo: p.gitRepo,
+    localPaths: p.localPaths?.length ? [...p.localPaths] : [''],
+    gitRepo: p.gitRepo ?? '',
     jiraProject: p.jiraProject,
     color: p.color,
-    dbType: p.dbType ?? '',
-    dbConnectionString: p.dbConnectionString ?? '',
   }
 }
 
@@ -47,13 +43,28 @@ function startNew() {
   form.value = blankForm()
 }
 
+function addPath() {
+  form.value.localPaths.push('')
+}
+
+function removePath(index: number) {
+  form.value.localPaths.splice(index, 1)
+  if (form.value.localPaths.length === 0) form.value.localPaths.push('')
+}
+
 function save() {
   if (!form.value.name.trim()) return
+  // Copy so the form and the store don't share the array; drop blank entries.
+  const fields = {
+    ...form.value,
+    gitRepo: form.value.gitRepo.trim(),
+    localPaths: form.value.localPaths.map(p => p.trim()).filter(Boolean),
+  }
   if (selectedId.value === 'new') {
-    const p = projectsStore.createProject(form.value)
+    const p = projectsStore.createProject(fields)
     selectedId.value = p.id
   } else if (selectedId.value) {
-    projectsStore.updateProject(selectedId.value, form.value)
+    projectsStore.updateProject(selectedId.value, fields)
   }
 }
 
@@ -66,9 +77,9 @@ function remove() {
   selectedId.value = null
 }
 
-async function browsePath() {
+async function browsePath(index: number) {
   const path = await invoke<string | null>('pick_folder')
-  if (path) form.value.localPath = path
+  if (path) form.value.localPaths[index] = path
 }
 
 function openChat(convId: string) {
@@ -226,23 +237,44 @@ function formatDate(iso: string) {
           />
         </div>
 
-        <!-- Local path -->
+        <!-- Local folders (clones) -->
         <div class="flex flex-col gap-1.5">
-          <label class="text-xs font-medium text-fg-subtle uppercase tracking-wide">Local Folder</label>
-          <div class="flex gap-2">
+          <label class="text-xs font-medium text-fg-subtle uppercase tracking-wide">Local Folders</label>
+          <div
+            v-for="(_, i) in form.localPaths"
+            :key="i"
+            class="flex gap-2"
+          >
             <input
-              v-model="form.localPath"
+              v-model="form.localPaths[i]"
               type="text"
               placeholder="/Users/you/projects/my-app"
               class="flex-1 px-3 py-2 rounded-lg border border-border bg-elevated text-fg text-sm placeholder-fg-faint outline-none focus:border-accent-light transition-colors font-mono"
             />
             <button
               class="px-3 py-2 rounded-lg border border-border bg-elevated text-fg-muted hover:text-fg hover:bg-border text-xs font-medium transition-colors cursor-pointer shrink-0"
-              @click="browsePath"
+              @click="browsePath(i)"
             >
               Browse
             </button>
+            <button
+              class="p-2 rounded-lg border border-border bg-elevated text-fg-subtle hover:text-red-500 hover:bg-red-50 transition-colors cursor-pointer shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Remove folder"
+              :disabled="form.localPaths.length === 1 && !form.localPaths[0]"
+              @click="removePath(i)"
+            >
+              <X :size="14" />
+            </button>
           </div>
+          <button
+            class="self-start flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-fg-muted hover:text-fg hover:bg-elevated transition-colors cursor-pointer"
+            @click="addPath"
+          >
+            <Plus :size="12" /> Add folder
+          </button>
+          <p class="text-xs text-fg-faint">
+            Add each clone of the repo you work in. You pick which one a chat uses from the chat view.
+          </p>
         </div>
 
         <!-- Git repo -->
@@ -266,35 +298,9 @@ function formatDate(iso: string) {
           <input
             v-model="form.jiraProject"
             type="text"
-            placeholder="https://yourorg.atlassian.net/jira/software/projects/MYAPP"
+            placeholder="MYAPP, OTHER — or https://yourorg.atlassian.net/jira/software/projects/MYAPP"
             class="px-3 py-2 rounded-lg border border-border bg-elevated text-fg text-sm placeholder-fg-faint outline-none focus:border-accent-light transition-colors font-mono"
           />
-        </div>
-
-        <!-- Database -->
-        <div class="flex flex-col gap-3">
-          <label class="text-xs font-medium text-fg-subtle uppercase tracking-wide flex items-center gap-1.5">
-            <Database :size="12" /> Database
-          </label>
-          <select
-            v-model="form.dbType"
-            class="px-3 py-2 rounded-lg border border-border bg-elevated text-fg text-sm outline-none focus:border-accent-light transition-colors cursor-pointer"
-          >
-            <option value="">None</option>
-            <option v-for="db in DB_TYPES" :key="db.value" :value="db.value">{{ db.label }}</option>
-          </select>
-          <div v-if="form.dbType" class="flex flex-col gap-1.5">
-            <label class="text-xs text-fg-subtle">Connection String</label>
-            <input
-              v-model="form.dbConnectionString"
-              type="password"
-              placeholder="Server=localhost;Database=mydb;User Id=sa;Password=...;TrustServerCertificate=True;"
-              class="px-3 py-2 rounded-lg border border-border bg-elevated text-fg text-sm placeholder-fg-faint outline-none focus:border-accent-light transition-colors font-mono"
-            />
-            <p class="text-xs text-fg-faint">
-              Stored locally. Use a read-only SQL account. Add <code class="bg-elevated px-1 rounded">TrustServerCertificate=True</code> for local instances with self-signed certificates.
-            </p>
-          </div>
         </div>
 
         <!-- Save -->

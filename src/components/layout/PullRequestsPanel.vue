@@ -3,10 +3,10 @@ import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import {
   GitPullRequest, GitPullRequestDraft, RefreshCw, PanelRightClose, CircleCheck, CircleX, CircleDot,
-  MessageSquare, AlertCircle, ListFilter, Check, Eye,
+  MessageSquare, AlertCircle, ListFilter, Check,
 } from '@lucide/vue'
-import { useGithubStore, PR_STATUSES, PR_ROLES } from '@/stores/github'
-import type { PrItem } from '@/stores/github'
+import { useGithubStore, PR_STATUSES, PR_ROLES, MY_PR_STATUS } from '@/stores/github'
+import type { PrItem, AuthorGroup } from '@/stores/github'
 
 const github = useGithubStore()
 const filterOpen = ref(false)
@@ -37,9 +37,35 @@ onBeforeUnmount(() => {
   document.removeEventListener('keydown', onKey)
 })
 
-/** Repo headers only matter when more than one repo is shown. */
-const showRepoHeaders = computed(() => github.groups.length > 1)
-const hiddenCount = computed(() => github.allItems.length - github.filteredItems.length)
+interface Section {
+  key: string
+  label: string
+  color: string | null
+  count: number
+  priority: boolean
+  authors: AuthorGroup[]
+}
+
+/** Pinned "changes requested on my PRs" section first, then project groups. */
+const sections = computed<Section[]>(() => {
+  const out: Section[] = []
+  if (github.priorityItems.length) {
+    out.push({
+      key: '__priority',
+      label: 'Changes requested on your PRs',
+      color: null,
+      count: github.priorityItems.length,
+      priority: true,
+      authors: [{ author: github.prs?.login ?? '', avatar: null, isMe: true, items: github.priorityItems }],
+    })
+  }
+  for (const g of github.groups) out.push({ ...g, priority: false })
+  return out
+})
+
+/** Project headers are redundant when the chat is scoped to one project. */
+const showProjectHeaders = computed(() => !github.scopeProject)
+const hiddenCount = computed(() => github.scopedItems.length - github.filteredItems.length)
 
 function timeAgo(iso: string): string {
   const mins = Math.max(0, Math.round((now.value - new Date(iso).getTime()) / 60_000))
@@ -96,7 +122,12 @@ function open(pr: PrItem) {
   <aside v-else class="w-80 shrink-0 flex flex-col border-l border-border/60 bg-surface/50 min-h-0">
     <div class="flex items-center gap-1 pl-4 pr-3 py-4 border-b border-border/60 shrink-0">
       <GitPullRequest :size="15" class="text-accent-icon mr-1" />
-      <h2 class="text-sm font-semibold text-fg flex-1">Pull requests</h2>
+      <div class="flex-1 min-w-0">
+        <h2 class="text-sm font-semibold text-fg">Pull requests</h2>
+        <p v-if="github.scopeProject" class="text-[11px] text-fg-subtle truncate" :title="github.scopeProject.name">
+          {{ github.scopeProject.name }}
+        </p>
+      </div>
 
       <!-- Filters -->
       <div ref="filterRoot" class="relative">
@@ -205,22 +236,52 @@ function open(pr: PrItem) {
       </div>
 
       <template v-else>
-        <p v-if="github.allItems.length === 0" class="px-4 py-6 text-sm text-fg-subtle">
+        <p v-if="github.scopeProject && !github.scopeProject.gitRepo?.trim()" class="px-4 py-6 text-sm text-fg-subtle">
+          This project has no GitHub repo set.
+        </p>
+        <p v-else-if="github.scopeProject && github.scopedItems.length === 0" class="px-4 py-6 text-sm text-fg-subtle">
+          No open pull requests involving you in {{ github.scopeProject.name }}.
+        </p>
+        <p v-else-if="github.allItems.length === 0" class="px-4 py-6 text-sm text-fg-subtle">
           No open pull requests involving you.
         </p>
         <p v-else-if="github.filteredItems.length === 0" class="px-4 py-6 text-sm text-fg-subtle">
           No pull requests match your filters.
         </p>
 
-        <!-- Repo groups -->
-        <section v-for="group in github.groups" :key="group.repo" :class="showRepoHeaders ? 'pt-3' : 'pt-1'">
-          <div v-if="showRepoHeaders" class="flex items-center gap-2 px-4 pb-1">
-            <span class="text-xs font-semibold text-fg truncate">{{ group.repo }}</span>
-            <span class="text-[10px] font-semibold px-1.5 rounded-full bg-elevated text-fg-subtle">{{ group.items.length }}</span>
+        <!-- Pinned section, then project → author groups -->
+        <section
+          v-for="section in sections"
+          :key="section.key"
+          class="pt-3"
+          :class="section.priority ? 'pb-2 bg-red-50/40 border-b border-red-200/60' : ''"
+        >
+          <div v-if="section.priority" class="flex items-center gap-1.5 px-4 pb-1">
+            <AlertCircle :size="13" class="shrink-0 text-red-600" />
+            <span class="text-xs font-semibold text-red-700 flex-1 truncate">{{ section.label }}</span>
+            <span class="text-[10px] font-semibold px-1.5 rounded-full bg-red-100 text-red-700">{{ section.count }}</span>
+          </div>
+          <div v-else-if="showProjectHeaders" class="flex items-center gap-2 px-4 pb-1">
+            <span
+              class="w-2 h-2 rounded-full shrink-0"
+              :class="section.color ? '' : 'bg-fg-faint'"
+              :style="section.color ? { backgroundColor: section.color } : undefined"
+            />
+            <span class="text-xs font-semibold text-fg truncate" :title="section.label">{{ section.label }}</span>
+            <span class="text-[10px] font-semibold px-1.5 rounded-full bg-elevated text-fg-subtle">{{ section.count }}</span>
           </div>
 
+          <div v-for="a in section.authors" :key="a.author">
+            <div v-if="!section.priority" class="flex items-center gap-1.5 px-4 pt-1.5 pb-0.5 text-[11px] text-fg-subtle">
+              <img v-if="a.avatar" :src="a.avatar" alt="" class="w-3.5 h-3.5 rounded-full shrink-0" />
+              <span class="font-medium truncate" :class="a.isMe ? 'text-fg' : ''" :title="a.author">
+                {{ a.isMe ? 'You' : a.author }}
+              </span>
+              <span class="shrink-0">· {{ a.items.length }}</span>
+            </div>
+
           <button
-            v-for="pr in group.items"
+            v-for="pr in a.items"
             :key="pr.id"
             class="w-full text-left px-4 py-2.5 hover:bg-elevated/70 transition-colors cursor-pointer border-l-2"
             :class="pr.role === 'requested' ? 'border-amber-400' : 'border-transparent'"
@@ -237,11 +298,14 @@ function open(pr: PrItem) {
             <!-- One line: the author name shortens first; everything else stays fixed. -->
             <div class="mt-1.5 pl-5 flex items-center gap-1.5 text-[11px] text-fg-subtle whitespace-nowrap">
               <span class="shrink-0">#{{ pr.number }}</span>
-              <span v-if="pr.author !== github.prs?.login" class="min-w-0 truncate" :title="pr.author">· {{ pr.author }}</span>
+              <span v-if="section.priority && showProjectHeaders" class="min-w-0 truncate" :title="pr.repo">· {{ pr.repo.split('/').pop() }}</span>
               <span class="shrink-0 px-1.5 rounded border" :class="STATUS_TAG[pr.status].cls">{{ STATUS_TAG[pr.status].label }}</span>
-              <span v-if="pr.role === 'requested'" class="shrink-0 flex" title="Your review is requested">
-                <Eye :size="12" class="text-amber-600" />
-              </span>
+              <span
+                v-if="pr.myStatus"
+                class="min-w-0 truncate px-1.5 rounded border"
+                :class="MY_PR_STATUS[pr.myStatus].cls"
+                :title="MY_PR_STATUS[pr.myStatus].title"
+              >{{ MY_PR_STATUS[pr.myStatus].label }}</span>
               <span class="flex-1" />
               <span v-if="pr.comments > 0" class="shrink-0 flex items-center gap-0.5" :title="`${pr.comments} comments`">
                 <MessageSquare :size="11" />{{ pr.comments }}
@@ -253,6 +317,7 @@ function open(pr: PrItem) {
               </span>
             </div>
           </button>
+          </div>
         </section>
       </template>
     </div>
