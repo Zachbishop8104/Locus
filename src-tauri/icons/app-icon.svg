@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <rect width="1024" height="1024" rx="224" fill="#1B4332"/>
+  <!-- Compass rose from locus-logo-dark.svg, scaled to fill the tile -->
+  <g transform="translate(512, 512) scale(12.5)">
+    <!-- Cardinal points -->
+    <path d="M0,-32 L6,-8 L0,-12 L-6,-8 Z" fill="#d4eedd"/>
+    <path d="M0,32 L6,8 L0,12 L-6,8 Z" fill="#d4eedd"/>
+    <path d="M32,0 L8,6 L12,0 L8,-6 Z" fill="#d4eedd"/>
+    <path d="M-32,0 L-8,6 L-12,0 L-8,-6 Z" fill="#d4eedd"/>
+    <!-- Diagonal points -->
+    <path d="M21,-21 L6,-8 L8,-6 Z" fill="#52B788"/>
+    <path d="M-21,-21 L-6,-8 L-8,-6 Z" fill="#52B788"/>
+    <path d="M21,21 L6,8 L8,6 Z" fill="#52B788"/>
+    <path d="M-21,21 L-6,8 L-8,6 Z" fill="#52B788"/>
+    <!-- Center diamond -->
+    <path d="M0,-6 L6,0 L0,6 L-6,0 Z" fill="#52B788"/>
+  </g>
+</svg>
